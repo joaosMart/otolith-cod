@@ -1,0 +1,150 @@
+# Otolith Age Prediction Configuration
+# Based on: Sigurðardóttir et al. (2023) - Ecological Informatics
+
+# =============================================================================
+# Data Configuration
+# =============================================================================
+data:
+  root_dir: "otolith_images"  # Relative to project root
+  age_range: [1, 10]          # Clip ages to this range (paper recommendation for cod)
+  train_ratio: 0.8            # 80% for training
+  val_ratio: 0.1              # 10% for validation
+  test_ratio: 0.1             # 10% for testing
+  image_extensions: [".jpg", ".jpeg", ".png"]
+
+# =============================================================================
+# Vision Models for Comparison (HuggingFace Transformers)
+# =============================================================================
+models:
+  # Baseline: Original CLIP from paper (OpenAI, 2021)
+  clip-vit-l-14-336:
+    model_id: "openai/clip-vit-large-patch14-336"
+    embedding_dim: 768
+    image_size: 336
+
+  # SOTA: SigLIP2 (Google, Feb 2025)
+  siglip2-so400m-14-384:
+    model_id: "google/siglip2-so400m-patch14-384"
+    embedding_dim: 1152
+    image_size: 384
+
+# Default model for feature extraction
+default_model: "clip-vit-l-14-336"
+normalize_features: true       # L2 normalize embeddings
+batch_size: 32                # Batch size for feature extraction
+
+# =============================================================================
+# Ridge Regression (Few-Shot Approach)
+# =============================================================================
+ridge:
+  alpha: 6.0                   # L2 regularization strength (from paper)
+  # Paper explored alpha in [0.1, 19.6], found stable performance in [5.0, 15.0]
+
+# =============================================================================
+# Support Vector Classifier (Few-Shot Approach)
+# =============================================================================
+svc:
+  C: 0.1                       # Inverse regularization (from paper)
+  kernel: "linear"             # Linear kernel
+  decision_function: "ovo"     # One-vs-one scheme (paper uses this)
+  class_weight: "balanced"     # Handle class imbalance
+  # Paper explored C in [0.001, 1.0], chose 0.1
+
+# =============================================================================
+# Cross-Validation
+# =============================================================================
+cv:
+  n_splits: 10                # 10-fold CV (as per paper)
+  random_state: 42            # For reproducibility
+
+# =============================================================================
+# Device Configuration (Apple Silicon MPS Support)
+# =============================================================================
+device:
+  preferred: null             # null for auto-detect, or "mps", "cuda", "cpu"
+  mps_fallback_to_cpu: true   # Fallback to CPU for unsupported operations
+  dataloader_workers: 0       # 0 is optimal for MPS
+
+# =============================================================================
+# Output Paths
+# =============================================================================
+output:
+  embeddings_dir: "outputs/embeddings"
+  models_dir: "outputs/models"
+  results_dir: "outputs/results"
+  figures_dir: "outputs/figures"
+  checkpoints_dir: "outputs/checkpoints"
+
+# =============================================================================
+# Logging
+# =============================================================================
+logging:
+  level: "INFO"
+  save_to_file: true
+  log_dir: "outputs/logs"
+
+# =============================================================================
+# Experiment Settings
+# =============================================================================
+experiment:
+  name: "cod_otolith_age_prediction"
+  seed: 42
+
+  # Which models to compare (frozen encoder → Ridge/SVC)
+  models_to_run:
+    - "clip-vit-l-14-336"       # Baseline from paper
+    - "siglip2-so400m-14-384"   # SOTA comparison
+
+  # Which classifiers to use
+  run_ridge: true
+  run_svc: false               # Ridge is primary, SVC optional
+
+# =============================================================================
+# Shallow Classifier Finetuning (Paper Replication)
+# =============================================================================
+shallow_finetune:
+  # Embeddings to use
+  embedding_model: "siglip2-so400m-14-384"
+  embedding_key: "features"
+  label_key: "labels"
+
+  # Experiment settings
+  n_experiments: 10
+
+  # Data splitting (paper methodology: 65/15/20%)
+  train_ratio: 0.8
+  val_ratio: 0.1
+  test_ratio: 0.1
+
+  # Ridge hyperparameter grid search
+  # Paper explored alpha in [0.1, 19.6], found stable in [5.0, 15.0]
+  alpha_min: 0.5
+  alpha_max: 19.6
+  alpha_steps: 100  # Linear spacing: np.linspace(0.1, 19.6, 20)
+
+  # GridSearchCV settings
+  cv_folds: 10
+  scoring: "f1_macro"  # Paper uses macro averaging for balanced evaluation
+
+  # Metric computation
+  metric_average: "macro"  # 'macro', 'weighted', or 'micro'
+  compute_per_class: false
+  compute_confusion_matrix: false
+
+  # Output
+  save_models: false
+  save_split_indices: true
+  output_dir: "outputs/results/shallow_siglip2"
+
+# =============================================================================
+# Paper Reference Values (for comparison)
+# =============================================================================
+paper_reference:
+  cod:
+    accuracy: 50.47
+    accuracy_std: 2.37
+    accuracy_pm1: 94.10
+    accuracy_pm1_std: 1.24
+    rmse: 0.84
+    rmse_std: 0.04
+    n_samples: 1170
