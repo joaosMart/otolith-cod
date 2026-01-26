@@ -139,10 +139,15 @@ def find_label_issues_cleanlab(
             random_state=random_state,
         )
 
+    # Convert 1-indexed labels (1-10) to 0-indexed (0-9) for cleanlab
+    # cleanlab expects labels to start at 0 and pred_probs columns to match label indices
+    labels_0indexed = labels - 1
+    min_label = labels.min()
+
     # Find label issues using cleanlab
     print(f"Finding label issues using cleanlab (filter_by={filter_by})...")
     label_issues_mask = find_label_issues(
-        labels=labels,
+        labels=labels_0indexed,
         pred_probs=pred_probs,
         filter_by=filter_by,
         return_indices_ranked_by="self_confidence",
@@ -152,12 +157,13 @@ def find_label_issues_cleanlab(
     # Get indices of issues
     issue_indices = np.where(label_issues_mask)[0]
 
-    # Build results dataframe
+    # Build results dataframe with 1-indexed labels for display
     results = []
     for idx in issue_indices:
-        given_label = labels[idx]
-        pred_label = np.argmax(pred_probs[idx]) + 1  # Assuming classes are 1-indexed
-        confidence_in_given = pred_probs[idx, given_label - 1]
+        given_label = labels[idx]  # Original 1-indexed label
+        pred_label_0indexed = np.argmax(pred_probs[idx])
+        pred_label = pred_label_0indexed + min_label  # Convert back to 1-indexed
+        confidence_in_given = pred_probs[idx, labels_0indexed[idx]]
 
         results.append(
             {
