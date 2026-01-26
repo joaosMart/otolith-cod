@@ -76,6 +76,36 @@ output:
   checkpoints_dir: "outputs/checkpoints"
 
 # =============================================================================
+# Visualization Settings
+# =============================================================================
+visualization:
+  dpi: 300                        # Resolution for saved figures (publication quality)
+  figure_format: "png"            # Default format: png, pdf, svg
+  confusion_matrix:
+    cmap: "Blues"                 # Colormap for confusion matrix
+    normalize: "true"             # Normalization: "true", "pred", "all", or null
+    figsize: [10, 8]             # Figure size [width, height]
+  roc_curves:
+    figsize: [10, 8]
+  precision_recall_curves:
+    figsize: [10, 8]
+  error_analysis:
+    figsize: [12, 8]
+    large_error_threshold: 1      # Threshold for "large errors" (> ±1 class)
+  learning_curves:
+    figsize: [15, 5]
+    train_fractions: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+
+# =============================================================================
+# Data Quality Analysis (Cleanlab)
+# =============================================================================
+data_quality:
+  enabled: false                  # Set to true to enable cleanlab analysis
+  n_folds: 5                     # Cross-validation folds for out-of-fold predictions
+  filter_by: "both"              # Cleanlab filtering: "both", "prune_by_class", etc.
+  min_examples_per_class: 5      # Minimum samples per class for filtering
+
+# =============================================================================
 # Logging
 # =============================================================================
 logging:

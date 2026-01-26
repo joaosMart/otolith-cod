@@ -47,6 +47,9 @@ notebook = [
     "ipykernel>=6.0.0",
     "ipywidgets>=8.0.0",
 ]
+analysis = [
+    "cleanlab>=2.6.0",  # Data quality analysis and label error detection
+]
 
 #[project.scripts]
 #extract-features = "scripts.extract_features:main"
