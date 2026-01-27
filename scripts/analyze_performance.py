@@ -24,8 +24,11 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 import numpy as np
+from sklearn.linear_model import Ridge
+from sklearn.utils.class_weight import compute_sample_weight
+from tqdm import tqdm
 
-from src.data import create_train_val_test_splits
+from src.data import create_train_val_test_splits, augment_embeddings
 from src.evaluation import (
     compute_classification_metrics,
 )
@@ -94,6 +97,18 @@ def parse_args():
         default=42,
         help="Random state for reproducibility",
     )
+    parser.add_argument(
+        "--metadata-csv",
+        type=str,
+        default="cod_otolith_age_final_with_quarters.csv",
+        help="Path to metadata CSV file for augmenting embeddings (optional)",
+    )
+    parser.add_argument(
+        "--tabular-columns",
+        type=str,
+        default="length,quarter_2,quarter_3,quarter_4",
+        help="Comma-separated list of tabular columns to add",
+    )
     return parser.parse_args()
 
 
@@ -138,23 +153,6 @@ def load_embeddings(embeddings_path: str) -> tuple:
     return features, labels, measurement_ids
 
 
-def extract_predictions_from_results(results: dict, splits_file: Path) -> tuple:
-    """
-    Extract predictions from results JSON.
-
-    Args:
-        results: Results dictionary from training
-        splits_file: Path to splits.json file
-
-    Returns:
-        Tuple of (all_y_true, all_y_pred, all_y_scores)
-    """
-    # This is a simplified version - in practice, you'd need to reload
-    # the model and make predictions, or save predictions during training
-    print("\nNote: This function requires predictions to be saved during training.")
-    print("For now, we'll reconstruct from results if possible.")
-
-    return None, None, None
 
 
 def main():
@@ -190,6 +188,19 @@ def main():
     if args.embeddings:
         features, labels, measurement_ids = load_embeddings(args.embeddings)
 
+        # Augment embeddings if metadata CSV is provided and exists
+        if args.metadata_csv and Path(args.metadata_csv).exists():
+            print(f"\nAugmenting embeddings with tabular features from {args.metadata_csv}...")
+            columns = args.tabular_columns.split(",")
+            try:
+                features = augment_embeddings(
+                    features, measurement_ids, args.metadata_csv, columns
+                )
+                print(f"  Augmented features shape: {features.shape}")
+            except Exception as e:
+                print(f"  Warning: Could not augment embeddings: {e}")
+                print(f"  Proceeding with original embeddings.")
+
         # Recreate splits using same configuration
         print("\n" + "-" * 60)
         print("RECREATING DATA SPLITS")
@@ -204,12 +215,129 @@ def main():
             random_state=config["random_state"],
         )
 
-        # Collect predictions from all experiments
-        # Note: We'll need to retrain or load saved models to get predictions
-        # For now, we'll work with what we have
+        # Generate predictions by re-training models on each split
+        print("\n" + "=" * 60)
+        print("GENERATING PREDICTIONS FOR VISUALIZATION")
+        print("=" * 60)
 
-        print("\nNote: For full analysis with confusion matrices and ROC curves,")
-        print("predictions need to be saved during training or models need to be reloaded.")
+        # Get best alpha from results
+        best_alpha = np.mean([r["best_alpha"] for r in results["experiment_results"]])
+        print(f"Using mean alpha: {best_alpha:.3f}")
+
+        # Collect predictions from all splits
+        all_y_true = []
+        all_y_pred = []
+        all_y_scores = []
+        all_measurement_ids = []
+
+        for split in tqdm(splits, desc="Generating predictions"):
+            X_test = features[split.test_indices]
+            y_test = labels[split.test_indices]
+            X_train = features[split.train_indices]
+            y_train = labels[split.train_indices]
+
+            # Train model
+            sample_weights = compute_sample_weight("balanced", y_train)
+            model = Ridge(alpha=best_alpha, random_state=split.fold)
+            model.fit(X_train, y_train, sample_weight=sample_weights)
+
+            # Get predictions
+            y_scores = model.predict(X_test)  # Continuous predictions
+            y_pred = np.round(y_scores).astype(int)
+
+            all_y_true.append(y_test)
+            all_y_pred.append(y_pred)
+            all_y_scores.append(y_scores)
+
+            if measurement_ids is not None:
+                all_measurement_ids.append(measurement_ids[split.test_indices])
+
+        # Concatenate all predictions
+        y_true_all = np.concatenate(all_y_true)
+        y_pred_all = np.concatenate(all_y_pred)
+        y_scores_all = np.concatenate(all_y_scores)
+        measurement_ids_all = np.concatenate(all_measurement_ids) if measurement_ids is not None else None
+
+        # Generate confusion matrix
+        print("\n" + "-" * 60)
+        print("CONFUSION MATRIX")
+        print("-" * 60)
+
+        plot_confusion_matrix(
+            y_true=y_true_all,
+            y_pred=y_pred_all,
+            normalize="true",
+            title="Confusion Matrix (Normalized by True Label)",
+            save_path=figures_dir / "confusion_matrix_normalized.png",
+            dpi=args.dpi,
+        )
+
+        plot_confusion_matrix(
+            y_true=y_true_all,
+            y_pred=y_pred_all,
+            normalize=None,
+            title="Confusion Matrix (Raw Counts)",
+            save_path=figures_dir / "confusion_matrix_counts.png",
+            dpi=args.dpi,
+        )
+
+        # Generate ROC curves
+        print("\n" + "-" * 60)
+        print("ROC CURVES")
+        print("-" * 60)
+
+        plot_roc_curves(
+            y_true=y_true_all,
+            y_scores=y_scores_all,
+            save_path=figures_dir / "roc_curves.png",
+            dpi=args.dpi,
+        )
+
+        # Generate Precision-Recall curves
+        print("\n" + "-" * 60)
+        print("PRECISION-RECALL CURVES")
+        print("-" * 60)
+
+        plot_precision_recall_curves(
+            y_true=y_true_all,
+            y_scores=y_scores_all,
+            save_path=figures_dir / "precision_recall_curves.png",
+            dpi=args.dpi,
+        )
+
+        # Generate error analysis
+        print("\n" + "-" * 60)
+        print("ERROR ANALYSIS")
+        print("-" * 60)
+
+        plot_error_distribution(
+            y_true=y_true_all,
+            y_pred=y_pred_all,
+            save_path=figures_dir / "error_distribution.png",
+            dpi=args.dpi,
+        )
+
+        plot_error_histogram(
+            y_true=y_true_all,
+            y_pred=y_pred_all,
+            save_path=figures_dir / "error_histogram.png",
+            dpi=args.dpi,
+        )
+
+        # Generate error report
+        error_report = generate_error_report(
+            y_true=y_true_all,
+            y_pred=y_pred_all,
+            measurement_ids=measurement_ids_all,
+            output_dir=output_dir / "error_analysis",
+        )
+
+        print(f"\nError Statistics:")
+        print(f"  Total samples: {error_report['statistics']['total_samples']}")
+        print(f"  Correct: {error_report['statistics']['correct_predictions']} ({error_report['statistics']['accuracy']*100:.2f}%)")
+        print(f"  Misclassified: {error_report['statistics']['misclassified']}")
+        print(f"  Large errors (>±1): {error_report['statistics']['large_errors']} ({error_report['statistics']['large_error_rate']*100:.2f}%)")
+        print(f"  MAE: {error_report['statistics']['mae']:.3f}")
 
     else:
         print("\n" + "-" * 60)
