@@ -22,14 +22,12 @@ class DataSplit:
     """Container for a single data split."""
 
     train_indices: np.ndarray
-    val_indices: np.ndarray
     test_indices: np.ndarray
     fold: Optional[int] = None
 
     def __repr__(self) -> str:
         return (
             f"DataSplit(train={len(self.train_indices)}, "
-            f"val={len(self.val_indices)}, "
             f"test={len(self.test_indices)}, "
             f"fold={self.fold})"
         )
@@ -91,69 +89,53 @@ def create_kfold_splits(
     return splits
 
 
-def create_train_val_test_splits(
+def create_train_test_splits(
     labels: np.ndarray,
     n_experiments: int = 10,
-    train_ratio: float = 0.65,
-    val_ratio: float = 0.15,
-    test_ratio: float = 0.20,
+    train_ratio: float = 0.85,
+    test_ratio: float = 0.15,
     random_state: int = 42,
+    seeds: Optional[List[int]] = None,
 ) -> List[DataSplit]:
     """
-    Create n independent stratified train/val/test splits.
+    Create n independent stratified train/test splits.
 
-    Unlike k-fold CV, each split is independent (samples can appear
-    in test sets of multiple splits). Follows paper's methodology
-    with fixed ratios rather than fold-based partitioning.
+    Each split is independent (samples can appear in test sets of multiple splits).
 
     Args:
         labels: Array of class labels for all samples
-        n_experiments: Number of independent splits to create (default: 10)
-        train_ratio: Proportion for training (default: 0.65)
-        val_ratio: Proportion for validation (default: 0.15)
-        test_ratio: Proportion for testing (default: 0.20)
+        n_experiments: Number of independent splits to create (default: 10).
+            Ignored when seeds is provided (inferred from len(seeds)).
+        train_ratio: Proportion for training (default: 0.85)
+        test_ratio: Proportion for testing (default: 0.15)
         random_state: Base random seed for reproducibility
+        seeds: Optional list of explicit seeds, one per experiment.
+            When provided, n_experiments is inferred from len(seeds).
 
     Returns:
         List of DataSplit objects, one per experiment
-
-    Raises:
-        AssertionError: If ratios don't sum to 1.0
     """
-    assert abs(train_ratio + val_ratio + test_ratio - 1.0) < 1e-6, (
-        f"Ratios must sum to 1.0, got {train_ratio + val_ratio + test_ratio}"
+    assert abs(train_ratio + test_ratio - 1.0) < 1e-6, (
+        f"Ratios must sum to 1.0, got {train_ratio + test_ratio}"
     )
+
+    if seeds is not None:
+        n_experiments = len(seeds)
 
     splits = []
     indices = np.arange(len(labels))
 
     for exp_idx in range(n_experiments):
-        seed = random_state + exp_idx
+        seed = seeds[exp_idx] if seeds is not None else random_state + exp_idx
 
-        # First split: separate test set
-        sss_test = StratifiedShuffleSplit(
+        sss = StratifiedShuffleSplit(
             n_splits=1, test_size=test_ratio, random_state=seed
         )
-        train_val_idx, test_idx = next(sss_test.split(indices, labels))
-
-        # Second split: separate train and val from remaining data
-        # Adjust val_size for the remaining (train + val) portion
-        val_size_adjusted = val_ratio / (train_ratio + val_ratio)
-        sss_val = StratifiedShuffleSplit(
-            n_splits=1, test_size=val_size_adjusted, random_state=seed
-        )
-        train_idx_local, val_idx_local = next(
-            sss_val.split(train_val_idx, labels[train_val_idx])
-        )
-
-        # Map back to original indices
-        train_idx = train_val_idx[train_idx_local]
-        val_idx = train_val_idx[val_idx_local]
+        train_idx, test_idx = next(sss.split(indices, labels))
 
         splits.append(
             DataSplit(
                 train_indices=train_idx,
-                val_indices=val_idx,
                 test_indices=test_idx,
                 fold=exp_idx,
             )

@@ -5,11 +5,12 @@
 # Data Configuration
 # =============================================================================
 data:
-  root_dir: "otolith_images"  # Relative to project root
+  root_dir: "otolith_images/segmented_images"  # Relative to project root
+  metadata_csv: "cod_otolith_age_final_with_scale.csv"  # Only process images present in this CSV
   age_range: [1, 10]          # Clip ages to this range (paper recommendation for cod)
-  train_ratio: 0.8            # 80% for training
-  val_ratio: 0.1              # 10% for validation
-  test_ratio: 0.1             # 10% for testing
+  train_ratio: 0.85           # 85% for training
+  val_ratio: 0                 # no validation set
+  test_ratio: 0.15             # 15% for testing
   image_extensions: [".jpg", ".jpeg", ".png"]
 
 # =============================================================================
@@ -27,6 +28,18 @@ models:
     model_id: "google/siglip2-so400m-patch14-384"
     embedding_dim: 1152
     image_size: 384
+
+  # DINOv2 with registers (Meta, 2024)
+  dinov2-vitl14-reg:
+    model_id: "facebook/dinov2-with-registers-large"
+    embedding_dim: 1024
+    image_size: 518
+
+  # Perception Encoder (Meta, 2025)
+  pe-core-l14-336:
+    model_id: "facebook/PE-Core-L14-336-hf"
+    embedding_dim: 768
+    image_size: 336
 
 # Default model for feature extraction
 default_model: "clip-vit-l-14-336"
@@ -122,8 +135,10 @@ experiment:
 
   # Which models to compare (frozen encoder → Ridge/SVC)
   models_to_run:
-    - "clip-vit-l-14-336"       # Baseline from paper
-    - "siglip2-so400m-14-384"   # SOTA comparison
+    - "clip-vit-l-14-336"
+    - "siglip2-so400m-14-384"
+    - "dinov2-vitl14-reg"
+    - "pe-core-l14-336"
 
   # Which classifiers to use
   run_ridge: true

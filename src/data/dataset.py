@@ -16,12 +16,19 @@ Structure expected:
 Based on: Sigurðardóttir et al. (2023) - Ecological Informatics
 """
 
+import pandas as pd
 import torch
 from torch.utils.data import Dataset
 from PIL import Image
 from pathlib import Path
-from typing import Optional, Callable, Tuple, List, Union, Dict
+from typing import Optional, Callable, Tuple, List, Union
 import numpy as np
+
+
+SUPPORTED_DATA = {
+    "raw_images": "otolith_images/raw_images",
+    "segmented_images": "otolith_images/segmented_images",
+}
 
 
 class OtolithDataset(Dataset):
@@ -50,6 +57,7 @@ class OtolithDataset(Dataset):
         age_range: Tuple[int, int] = (1, 10),
         indices: Optional[List[int]] = None,
         image_extensions: Tuple[str, ...] = (".jpg", ".jpeg", ".png"),
+        metadata_csv: Optional[Union[str, Path]] = None,
     ):
         """
         Initialize the OtolithDataset.
@@ -77,6 +85,12 @@ class OtolithDataset(Dataset):
         self.transform = transform
         self.age_range = age_range
         self.image_extensions = image_extensions
+
+        # Load valid measurement IDs from metadata CSV
+        self._valid_ids: Optional[set] = None
+        if metadata_csv is not None:
+            df = pd.read_csv(metadata_csv, usecols=["measurement_id"])
+            self._valid_ids = set(df["measurement_id"].astype(int).values)
 
         # Collect all samples
         self._all_samples = self._collect_samples()
@@ -128,6 +142,14 @@ class OtolithDataset(Dataset):
             # Collect all images in this age directory
             for ext in self.image_extensions:
                 for img_path in age_dir.glob(f"*{ext}"):
+                    # Filter by metadata CSV if provided
+                    if self._valid_ids is not None:
+                        try:
+                            mid = int(img_path.stem)
+                        except ValueError:
+                            continue
+                        if mid not in self._valid_ids:
+                            continue
                     samples.append((img_path, clipped_age))
 
         return samples
@@ -186,78 +208,6 @@ class OtolithDataset(Dataset):
         unique, counts = np.unique(labels, return_counts=True)
         return dict(zip(unique.tolist(), counts.tolist()))
 
-    def get_class_weights(self) -> torch.Tensor:
-        """
-        Compute inverse frequency class weights for imbalanced data.
-
-        Used for weighted cross-entropy loss during fine-tuning.
-        Following the paper's approach to handle class imbalance.
-
-        Returns:
-            Tensor of class weights indexed by class label
-        """
-        labels = self.get_labels()
-        unique, counts = np.unique(labels, return_counts=True)
-
-        # Inverse frequency weighting
-        weights = 1.0 / counts
-        # Normalize so weights sum to number of classes
-        weights = weights / weights.sum() * len(unique)
-
-        # Create weight tensor indexed by class
-        # Ensure tensor covers all possible class indices
-        max_class = unique.max()
-        weight_tensor = torch.zeros(max_class + 1)
-        for cls, w in zip(unique, weights):
-            weight_tensor[cls] = w
-
-        return weight_tensor
-
-    def get_sample_weights(self) -> torch.Tensor:
-        """
-        Compute per-sample weights for weighted sampling.
-
-        Useful for creating a WeightedRandomSampler to balance batches.
-
-        Returns:
-            Tensor of weights for each sample
-        """
-        labels = self.get_labels()
-        unique, counts = np.unique(labels, return_counts=True)
-        class_weights = {cls: 1.0 / count for cls, count in zip(unique, counts)}
-
-        sample_weights = torch.tensor(
-            [class_weights[label] for label in labels], dtype=torch.float32
-        )
-        return sample_weights
-
-    def subset(self, indices: List[int]) -> "OtolithDataset":
-        """
-        Create a subset of this dataset with given indices.
-
-        Indices are relative to THIS dataset's samples, not the original
-        _all_samples. This allows correct nested subset operations.
-
-        Args:
-            indices: List of indices to include in subset
-
-        Returns:
-            New OtolithDataset containing only the specified samples
-        """
-        # Map local indices to actual samples (fixes nested subset bug)
-        new_samples = [self.samples[i] for i in indices]
-
-        # Create new dataset without calling __init__ to avoid re-scanning
-        new_dataset = OtolithDataset.__new__(OtolithDataset)
-        new_dataset.root_dir = self.root_dir
-        new_dataset.transform = self.transform
-        new_dataset.age_range = self.age_range
-        new_dataset.image_extensions = self.image_extensions
-        new_dataset._all_samples = self._all_samples
-        new_dataset.samples = new_samples
-
-        return new_dataset
-
     def __repr__(self) -> str:
         """String representation of the dataset."""
         class_counts = self.get_class_counts()
@@ -269,81 +219,3 @@ class OtolithDataset(Dataset):
             f"  class_counts={class_counts}\n"
             f")"
         )
-
-
-class OtolithEmbeddingDataset(Dataset):
-    """
-    Dataset for pre-extracted CLIP embeddings.
-
-    Used for training shallow models (Ridge, SVC) efficiently
-    without re-extracting features each time.
-
-    Example:
-        >>> dataset = OtolithEmbeddingDataset.from_file("embeddings.npz")
-        >>> features, age = dataset[0]
-    """
-
-    def __init__(
-        self,
-        features: np.ndarray,
-        labels: np.ndarray,
-        indices: Optional[List[int]] = None,
-    ):
-        """
-        Initialize from numpy arrays.
-
-        Args:
-            features: Array of shape (N, embedding_dim)
-            labels: Array of shape (N,) with age labels
-            indices: Optional indices for subsetting
-        """
-        if indices is not None:
-            self.features = features[indices]
-            self.labels = labels[indices]
-        else:
-            self.features = features
-            self.labels = labels
-
-    @classmethod
-    def from_file(
-        cls, path: Union[str, Path], indices: Optional[List[int]] = None
-    ) -> "OtolithEmbeddingDataset":
-        """
-        Load embeddings from a .npz file.
-
-        Args:
-            path: Path to the .npz file containing 'features' and 'labels'
-            indices: Optional indices for subsetting
-
-        Returns:
-            OtolithEmbeddingDataset instance
-        """
-        data = np.load(path, allow_pickle=False)
-        return cls(data["features"], data["labels"], indices)
-
-    def __len__(self) -> int:
-        return len(self.labels)
-
-    def __getitem__(self, idx: int) -> Tuple[np.ndarray, int]:
-        return self.features[idx], self.labels[idx]
-
-    def get_labels(self) -> np.ndarray:
-        """Return all labels."""
-        return self.labels
-
-    def get_features(self) -> np.ndarray:
-        """Return all features."""
-        return self.features
-
-    def get_class_weights(self) -> torch.Tensor:
-        """Compute class weights for imbalanced data."""
-        unique, counts = np.unique(self.labels, return_counts=True)
-        weights = 1.0 / counts
-        weights = weights / weights.sum() * len(unique)
-
-        max_class = unique.max()
-        weight_tensor = torch.zeros(max_class + 1)
-        for cls, w in zip(unique, weights):
-            weight_tensor[cls] = w
-
-        return weight_tensor

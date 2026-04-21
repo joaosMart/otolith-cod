@@ -18,78 +18,6 @@ from sklearn.metrics import (
 )
 
 
-def compute_accuracy(y_true: np.ndarray, y_pred: np.ndarray) -> float:
-    """Compute exact accuracy."""
-    return accuracy_score(y_true, y_pred)
-
-
-def compute_accuracy_pm1(y_true: np.ndarray, y_pred: np.ndarray) -> float:
-    """
-    Compute ±1 accuracy (predictions within 1 year of true age).
-
-    This is a key metric for otolith age prediction since being off
-    by one year is often acceptable in fisheries research.
-    """
-    within_one = np.abs(y_true - y_pred) <= 1
-    return np.mean(within_one)
-
-
-def compute_rmse(y_true: np.ndarray, y_pred: np.ndarray) -> float:
-    """Compute Root Mean Squared Error."""
-    return np.sqrt(mean_squared_error(y_true, y_pred))
-
-
-def compute_precision(
-    y_true: np.ndarray, y_pred: np.ndarray, average: str = "macro"
-) -> float:
-    """
-    Compute precision with specified averaging.
-
-    Args:
-        y_true: True labels
-        y_pred: Predicted labels
-        average: Averaging method ('macro', 'weighted', 'micro')
-
-    Returns:
-        Precision score
-    """
-    return precision_score(y_true, y_pred, average=average, zero_division=0)
-
-
-def compute_recall(
-    y_true: np.ndarray, y_pred: np.ndarray, average: str = "macro"
-) -> float:
-    """
-    Compute recall with specified averaging.
-
-    Args:
-        y_true: True labels
-        y_pred: Predicted labels
-        average: Averaging method ('macro', 'weighted', 'micro')
-
-    Returns:
-        Recall score
-    """
-    return recall_score(y_true, y_pred, average=average, zero_division=0)
-
-
-def compute_f1(
-    y_true: np.ndarray, y_pred: np.ndarray, average: str = "macro"
-) -> float:
-    """
-    Compute F1-score with specified averaging.
-
-    Args:
-        y_true: True labels
-        y_pred: Predicted labels
-        average: Averaging method ('macro', 'weighted', 'micro')
-
-    Returns:
-        F1 score
-    """
-    return f1_score(y_true, y_pred, average=average, zero_division=0)
-
-
 def compute_classification_metrics(
     y_true: np.ndarray, y_pred: np.ndarray, average: str = "macro"
 ) -> Dict[str, float]:
@@ -104,31 +32,15 @@ def compute_classification_metrics(
     Returns:
         Dictionary with accuracy, accuracy_pm1, precision, recall, f1, rmse
     """
+    within_one = np.abs(y_true - y_pred) <= 1
+
     return {
-        "accuracy": compute_accuracy(y_true, y_pred),
-        "accuracy_pm1": compute_accuracy_pm1(y_true, y_pred),
-        "precision": compute_precision(y_true, y_pred, average),
-        "recall": compute_recall(y_true, y_pred, average),
-        "f1": compute_f1(y_true, y_pred, average),
-        "rmse": compute_rmse(y_true, y_pred),
-    }
-
-
-def compute_all_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> Dict[str, float]:
-    """
-    Compute all evaluation metrics.
-
-    Args:
-        y_true: True age labels
-        y_pred: Predicted age labels
-
-    Returns:
-        Dictionary with accuracy, accuracy_pm1, and rmse
-    """
-    return {
-        "accuracy": compute_accuracy(y_true, y_pred),
-        "accuracy_pm1": compute_accuracy_pm1(y_true, y_pred),
-        "rmse": compute_rmse(y_true, y_pred),
+        "accuracy": accuracy_score(y_true, y_pred),
+        "accuracy_pm1": float(np.mean(within_one)),
+        "precision": precision_score(y_true, y_pred, average=average, zero_division=0),
+        "recall": recall_score(y_true, y_pred, average=average, zero_division=0),
+        "f1": f1_score(y_true, y_pred, average=average, zero_division=0),
+        "rmse": float(np.sqrt(mean_squared_error(y_true, y_pred))),
     }
 
 
@@ -167,17 +79,18 @@ def format_results_table(
         Formatted markdown table string
     """
     lines = [
-        "| Model | Accuracy | ±1 Accuracy | RMSE |",
-        "|-------|----------|-------------|------|",
+        "| Model | F1 (Macro) | Accuracy | ±1 Accuracy | RMSE |",
+        "|-------|------------|----------|-------------|------|",
     ]
 
     for model_name, metrics in results.items():
+        f1_mean, f1_std = metrics["f1"]
         acc_mean, acc_std = metrics["accuracy"]
         pm1_mean, pm1_std = metrics["accuracy_pm1"]
         rmse_mean, rmse_std = metrics["rmse"]
 
         lines.append(
-            f"| {model_name} | {acc_mean*100:.2f}±{acc_std*100:.2f}% | "
+            f"| {model_name} | {f1_mean*100:.2f}±{f1_std*100:.2f}% | {acc_mean*100:.2f}±{acc_std*100:.2f}% | "
             f"{pm1_mean*100:.2f}±{pm1_std*100:.2f}% | {rmse_mean:.3f}±{rmse_std:.3f} |"
         )
 

@@ -1,0 +1,5 @@
+Here I want to understand the performance of the model when classifying the otoliths. The idea is to create visualisations that can help identify patterns in the model's predictions, such as confusion matrices, ROC curves, and precision-recall curves. Additionally, I want to observe the examples where the model was wrong, specially the ones over the Accuracy plus or minus 1. This helps observing where the model is struggling with predicitng classes with more than 1 class difference.
+
+Additionally I would like to plot a learning curve to see how data hungry the model is. This means we need to split for each of the 10 splits the data set in 10%, 20%, ..., 100% subsets and train the model on each of these subsets and evaluate on the test set to see how the performance changes with more data.
+
+Additionally I want to use cleanlab to identify potential label issues or data quality issues in the dataset. This can help improve the quality of the training data and potentially lead to better model performance. 

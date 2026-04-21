@@ -38,11 +38,11 @@ Extend `SUPPORTED_MODELS` with a model family field. `load_model()` handles all 
    - `dinov2` family: `model(pixel_values=images).last_hidden_state` then split into:
      - `features_cls`: index 0 — shape (N, 1024)
      - `features_patch`: index 1: — shape (N, num_patches, 1024)
-     - `features_mean_pool`: mean over patch dimension — shape (N, 1024)
+     - `features_patch_mean_pool`: mean over patch dimension — shape (N, 1024)
 
 4. **Return type** — changes from `(features, labels)` to `(features_dict, labels)`:
    - CLIP/SigLIP/PE: `{"features": array}`
-   - DINOv2: `{"features_cls": array, "features_patch": array, "features_mean_pool": array}`
+   - DINOv2: `{"features_cls": array, "features_patch": array, "features_patch_mean_pool": array}`
 
 ### `src/features/cache.py`
 
@@ -74,7 +74,7 @@ No new pip dependencies. All models load via `transformers` (already installed).
 Single `.npz` file per model. Keys:
 
 - CLIP/SigLIP/PE: `features`, `labels`, `measurement_ids`
-- DINOv2: `features_cls`, `features_patch`, `features_mean_pool`, `labels`, `measurement_ids`
+- DINOv2: `features_cls`, `features_patch`, `features_patch_mean_pool`, `labels`, `measurement_ids`
 
 ## Downstream Impact
 

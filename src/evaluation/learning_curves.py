@@ -10,7 +10,7 @@ from typing import Dict, List, Optional, Tuple
 import matplotlib.pyplot as plt
 import numpy as np
 from sklearn.linear_model import Ridge
-from sklearn.utils.class_weight import compute_sample_weight
+from sklearn.preprocessing import StandardScaler
 from tqdm import tqdm
 
 from src.data import DataSplit
@@ -49,12 +49,17 @@ def compute_learning_curve(
             - test_rmse: RMSE on test set
     """
     if train_fractions is None:
-        train_fractions = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+        train_fractions = [0.02, 0.04, 0.06, 0.08, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
 
-    X_train = features[split.train_indices]
+    X_train_raw = features[split.train_indices]
     y_train = labels[split.train_indices]
-    X_test = features[split.test_indices]
+    X_test_raw = features[split.test_indices]
     y_test = labels[split.test_indices]
+
+    # Scale features (fit on full train set)
+    scaler = StandardScaler()
+    X_train = scaler.fit_transform(X_train_raw)
+    X_test = scaler.transform(X_test_raw)
 
     results = {
         "train_sizes": [],
@@ -88,16 +93,15 @@ def compute_learning_curve(
         y_subset = y_train[subset_indices]
 
         # Train model
-        sample_weights = compute_sample_weight("balanced", y_subset)
-        model = Ridge(alpha=alpha, random_state=random_state)
-        model.fit(X_subset, y_subset, sample_weight=sample_weights)
+        model = Ridge(alpha=alpha)
+        model.fit(X_subset, y_subset)
 
         # Evaluate on training subset
-        y_train_pred = np.round(model.predict(X_subset)).astype(int)
+        y_train_pred = np.clip(np.round(model.predict(X_subset)).astype(int), 1, 10)
         train_accuracy = np.mean(y_train_pred == y_subset)
 
         # Evaluate on test set
-        y_test_pred = np.round(model.predict(X_test)).astype(int)
+        y_test_pred = np.clip(np.round(model.predict(X_test)).astype(int), 1, 10)
         test_metrics = compute_classification_metrics(y_test, y_test_pred)
 
         results["train_sizes"].append(len(X_subset))
