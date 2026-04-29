@@ -122,13 +122,29 @@ def main():
         print("=" * 60)
         return
 
-    # Load embeddings
-    features, labels, measurement_ids = load_cached_embeddings(args.embeddings)
+    # Load embeddings using feature config from training
+    feature_key = config.get("feature_key", None)
+    add_tabular = config.get("add_tabular", True)
+    tabular_columns = config.get("tabular_columns", args.tabular_columns.split(","))
 
-    # Augment if metadata exists
-    if args.metadata_csv and Path(args.metadata_csv).exists():
+    features_dict, labels, measurement_ids = load_cached_embeddings(args.embeddings)
+
+    # Select the same feature key used during training
+    if feature_key and feature_key in features_dict:
+        features = features_dict[feature_key]
+        print(f"\n  Using feature key from training: {feature_key}")
+    elif "features" in features_dict:
+        features = features_dict["features"]
+    elif "features_cls" in features_dict:
+        features = features_dict["features_cls"]
+    else:
+        raise KeyError(f"No recognized feature key. Found: {list(features_dict.keys())}")
+    print(f"  Features shape: {features.shape}")
+
+    # Augment if training used tabular features
+    if add_tabular and args.metadata_csv and Path(args.metadata_csv).exists():
         print(f"\nAugmenting embeddings with tabular features from {args.metadata_csv}...")
-        columns = args.tabular_columns.split(",")
+        columns = tabular_columns
         try:
             features = augment_embeddings(features, measurement_ids, args.metadata_csv, columns)
             print(f"  Augmented features shape: {features.shape}")

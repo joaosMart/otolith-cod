@@ -58,7 +58,13 @@ def parse_args():
     parser.add_argument("--output-dir", type=str, default="outputs/results/shallow_siglip2", help="Directory for output files")
     parser.add_argument("--n-jobs", type=int, default=-1, help="Parallel jobs for GridSearchCV (-1 for all cores)")
     parser.add_argument("--metadata-csv", type=str, default="cod_otolith_age_final_with_scale.csv", help="Path to metadata CSV file")
-    parser.add_argument("--add-tabular", action="store_true", default=True, help="Add tabular features to embeddings")
+    parser.add_argument(
+        "--feature-key",
+        type=str,
+        default=None,
+        help="Which feature key to use from embeddings (e.g. features_cls, features_patch_mean_pool). Auto-detected if not set.",
+    )
+    parser.add_argument("--add-tabular", action=argparse.BooleanOptionalAction, default=True, help="Add tabular features to embeddings")
     parser.add_argument(
         "--tabular-columns",
         type=str,
@@ -114,13 +120,18 @@ def main():
 
     # Load embeddings
     features_dict, labels, measurement_ids = load_cached_embeddings(args.embeddings)
-    # Use CLS features for DINOv2, or standard features for CLIP/SigLIP/PE
-    if "features" in features_dict:
-        features = features_dict["features"]
+    if args.feature_key:
+        if args.feature_key not in features_dict:
+            raise KeyError(f"Key '{args.feature_key}' not found. Available: {list(features_dict.keys())}")
+        used_feature_key = args.feature_key
+    elif "features" in features_dict:
+        used_feature_key = "features"
     elif "features_cls" in features_dict:
-        features = features_dict["features_cls"]
+        used_feature_key = "features_cls"
     else:
         raise KeyError(f"No recognized feature key in embeddings. Found: {list(features_dict.keys())}")
+    features = features_dict[used_feature_key]
+    print(f"  Feature key: {used_feature_key}")
     print(f"  Features shape: {features.shape}")
     print(f"  Labels shape: {labels.shape}")
 
@@ -203,6 +214,9 @@ def main():
         "timestamp": timestamp,
         "config": {
             "embeddings_path": args.embeddings,
+            "feature_key": used_feature_key,
+            "add_tabular": args.add_tabular,
+            "tabular_columns": args.tabular_columns.split(",") if args.add_tabular else [],
             "seeds": seeds,
             "n_experiments": n_experiments,
             "train_ratio": args.train_ratio,

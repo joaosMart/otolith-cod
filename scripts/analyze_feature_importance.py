@@ -119,7 +119,19 @@ def main():
     print("FEATURE IMPORTANCE ANALYSIS")
     print("=" * 60)
 
-    features, labels, measurement_ids = load_cached_embeddings(args.embeddings)
+    features_dict, labels, measurement_ids = load_cached_embeddings(args.embeddings)
+
+    # Use feature key from training config if available
+    feature_key = config.get("feature_key", None) if Path(args.results).exists() else None
+    if feature_key and feature_key in features_dict:
+        features = features_dict[feature_key]
+        print(f"  Feature key (from training): {feature_key}")
+    elif "features" in features_dict:
+        features = features_dict["features"]
+    elif "features_cls" in features_dict:
+        features = features_dict["features_cls"]
+    else:
+        raise KeyError(f"No recognized feature key. Found: {list(features_dict.keys())}")
     embedding_dim = features.shape[1]
     print(f"  Embeddings: {features.shape}")
 

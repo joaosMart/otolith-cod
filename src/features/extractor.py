@@ -18,6 +18,11 @@ import cv2
 import PIL.Image as Image
 
 from transformers import AutoModel, AutoProcessor, AutoImageProcessor
+import core.vision_encoder.pe as pe_encoder
+import core.vision_encoder.transforms as pe_transforms
+
+
+
 
 
 # Model configurations: (hf_model_id, embedding_dim, family)
@@ -27,7 +32,7 @@ SUPPORTED_MODELS = {
     "clip-vit-l-14-336": ("openai/clip-vit-large-patch14-336", 768, "clip"),
     "siglip2-so400m-14-384": ("google/siglip2-so400m-patch14-384", 1152, "clip"),
     "dinov2-vitl14-reg": ("facebook/dinov2-with-registers-large", 1024, "dinov2"),
-    "pe-core-l14-336": ("facebook/PE-Core-L14-336-hf", 768, "pe"),
+    "pe-core-l14-336": ("PE-Core-L14-336", 1024, "pe"),
 }
 
 
@@ -78,13 +83,28 @@ def load_model(
     model_id, _, family = SUPPORTED_MODELS[model_name]
     device = device or get_device()
 
+    if family == "pe":
+        print(f"Loading {model_id} via PE native API (pretrained=True)...")
+        pe_model = pe_encoder.CLIP.from_config(model_id, pretrained=True)
+        pe_model = pe_model.to(device)
+        pe_model.eval()
+
+        pe_preprocess = pe_transforms.get_image_transform(pe_model.image_size)
+
+        def preprocess(image):
+            if apply_clahe:
+                image = clahe_enhancement(image, repeat_clahe=repeat_clahe)
+            return pe_preprocess(image)
+
+        return pe_model, preprocess
+
     print(f"Loading {model_id} from HuggingFace...")
     model = AutoModel.from_pretrained(
         model_id,
         torch_dtype=torch.float32,
     )
 
-    # DINOv2 uses AutoImageProcessor; CLIP/SigLIP/PE use AutoProcessor
+    # DINOv2 uses AutoImageProcessor; CLIP/SigLIP use AutoProcessor
     if family == "dinov2":
         processor = AutoImageProcessor.from_pretrained(model_id)
     else:
@@ -157,8 +177,13 @@ def extract_features(
                 collectors.setdefault("features_cls", []).append(cls_features.cpu().numpy())
                 collectors.setdefault("features_patch", []).append(patch_features.cpu().numpy())
                 collectors.setdefault("features_patch_mean_pool", []).append(mean_pool_features.cpu().numpy())
+            elif family == "pe":
+                features = model.encode_image(images)
+                if normalize:
+                    features = F.normalize(features, p=2, dim=-1, eps=1e-8)
+                collectors.setdefault("features", []).append(features.cpu().numpy())
             else:
-                # clip and pe families both use get_image_features
+                # clip/siglip families use get_image_features
                 features = model.get_image_features(pixel_values=images)
                 if normalize:
                     features = F.normalize(features, p=2, dim=-1, eps=1e-8)

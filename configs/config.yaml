@@ -37,8 +37,8 @@ models:
 
   # Perception Encoder (Meta, 2025)
   pe-core-l14-336:
-    model_id: "facebook/PE-Core-L14-336-hf"
-    embedding_dim: 768
+    model_id: "hf-hub:timm/PE-Core-L-14-336"
+    embedding_dim: 1024
     image_size: 336
 
 # Default model for feature extraction

@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 import matplotlib
 matplotlib.rcParams.update({'font.size': 12})
 
-base = "../outputs/results"
+base = os.path.join(os.path.dirname(__file__), "../outputs/results")
 dirs = sorted(glob.glob(f"{base}/*/results.json"))
 
 # Collect data
@@ -51,6 +51,6 @@ for ax, key, title in zip(axes,
         ax.text(m + s + 0.002, i, f"{m:.3f}", va='center', fontsize=9)
 
 plt.tight_layout()
-plt.savefig("../outputs/results/results_comparison.png", dpi=150, bbox_inches='tight')
+plt.savefig(os.path.join(os.path.dirname(__file__), "../outputs/results/results_comparison.png"), dpi=150, bbox_inches='tight')
 plt.show()
 print("\nPlot saved to outputs/results/results_comparison.png")
