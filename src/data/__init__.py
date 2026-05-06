@@ -1,17 +1,18 @@
 """
 Data processing module for otolith age prediction.
 
-This module provides:
+Provides:
 - OtolithDataset: PyTorch dataset for loading otolith images
 - Stratified k-fold cross-validation splitting
 """
 
-from .dataset import OtolithDataset
-from .splits import DataSplit, create_kfold_splits, create_train_val_test_splits
+from .dataset import OtolithDataset, SUPPORTED_DATA
+from .splits import DataSplit, create_kfold_splits, create_train_test_splits
 
 __all__ = [
     "OtolithDataset",
+    "SUPPORTED_DATA",
     "DataSplit",
     "create_kfold_splits",
-    "create_train_val_test_splits",
+    "create_train_test_splits",
 ]
