@@ -18,12 +18,12 @@ import cv2
 import PIL.Image as Image
 
 from transformers import AutoModel, AutoProcessor, AutoImageProcessor
-import core.vision_encoder.pe as pe_encoder
-import core.vision_encoder.transforms as pe_transforms
-
-
-
-
+try:
+    import core.vision_encoder.pe as pe_encoder
+    import core.vision_encoder.transforms as pe_transforms
+except ImportError:
+    pe_encoder = None
+    pe_transforms = None
 
 # Model configurations: (hf_model_id, embedding_dim, family)
 # family determines extraction logic: "clip" uses get_image_features(),
