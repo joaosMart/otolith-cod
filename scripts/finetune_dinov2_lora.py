@@ -125,7 +125,9 @@ def build_augmentation_transform(processor, apply_clahe=True, repeat_clahe=True)
         *clahe_step,
         transforms.RandomHorizontalFlip(p=0.5),
         transforms.RandomRotation(degrees=15),
-        transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.1, hue=0.05),
+        transforms.RandomApply([
+            transforms.GaussianBlur(kernel_size=5, sigma=(0.1, 1.0))
+        ], p=0.3),
         transforms.Resize((image_size, image_size)),
         transforms.ToTensor(),
         transforms.Normalize(mean=mean, std=std),
@@ -179,6 +181,7 @@ def train_one_epoch(model, dataloader, num_classes, optimizer, scheduler, device
         # corn_loss takes labels directly (not extended-binary levels)
         loss = corn_loss(logits, labels, num_classes=num_classes)
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
         scheduler.step()
 
@@ -295,12 +298,14 @@ def main():
 
     # Apply LoRA — for SigLIP2, apply only to vision_model to avoid text tower
     lora_target_modules = model_cfg["lora_targets"]
+    modules_to_save = ["head", "post_layernorm"] if args.model == "siglip2" else None
     lora_config = LoraConfig(
         r=args.rank,
         lora_alpha=args.lora_alpha,
         target_modules=lora_target_modules,
         lora_dropout=args.lora_dropout,
         bias="none",
+        modules_to_save=modules_to_save,
     )
     if args.model == "siglip2":
         backbone.vision_model = get_peft_model(backbone.vision_model, lora_config)
