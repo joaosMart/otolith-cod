@@ -124,10 +124,10 @@ def build_augmentation_transform(processor, apply_clahe=True, repeat_clahe=True)
     train_transform = transforms.Compose([
         *clahe_step,
         transforms.RandomHorizontalFlip(p=0.5),
-        transforms.RandomRotation(degrees=15),
+        transforms.RandomAffine(degrees=15, scale=(0.8, 1.2)),
         transforms.RandomApply([
             transforms.GaussianBlur(kernel_size=5, sigma=(0.1, 1.0))
-        ], p=0.3),
+        ], p=0.5),
         transforms.Resize((image_size, image_size)),
         transforms.ToTensor(),
         transforms.Normalize(mean=mean, std=std),
