@@ -339,6 +339,8 @@ def main():
         metadata_csv=metadata_csv,
     )
     labels = full_dataset.get_labels()
+    all_paths = full_dataset.get_paths()
+    all_measurement_ids = [int(p.stem) for p in all_paths]
     print(f"\nDataset: {len(full_dataset)} images")
     print(f"Class distribution: {full_dataset.get_class_counts()}")
 
@@ -472,6 +474,8 @@ def main():
         "ft_train_size": len(ft_train_idx),
         "ft_val_size": len(ft_val_idx),
         "test_size": len(_test_idx),
+        "test_measurement_ids": [all_measurement_ids[i] for i in _test_idx],
+        "train_measurement_ids": [all_measurement_ids[i] for i in train_pool_idx],
         "history": history,
     }
     with open(output_dir / "training_info.json", "w") as f:

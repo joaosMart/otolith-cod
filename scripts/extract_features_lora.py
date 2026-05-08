@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """
-Extract embeddings from LoRA-adapted DINOv2.
+Extract embeddings from LoRA-adapted vision models (DINOv2 / SigLIP2).
 
-Loads the base DINOv2 model, merges LoRA adapter weights, and extracts
+Loads the base model, merges LoRA adapter weights, and extracts
 CLS / patch / mean-pool embeddings identical to the frozen pipeline.
 Output is compatible with train_classifier.py.
 
 Usage:
-    python scripts/extract_features_lora.py
-    python scripts/extract_features_lora.py --adapter-path outputs/lora/lora_adapter
+    python scripts/extract_features_lora.py                        # DINOv2 (default)
+    python scripts/extract_features_lora.py --model siglip2        # SigLIP2
+    python scripts/extract_features_lora.py --adapter-path outputs/lora/siglip2/lora_adapter --model siglip2
     python scripts/extract_features_lora.py --merge  # merge LoRA weights into base model
 """
 
@@ -24,7 +25,7 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-from transformers import AutoModel, AutoImageProcessor
+from transformers import AutoModel, AutoImageProcessor, AutoProcessor
 from peft import PeftModel
 
 from src.data import OtolithDataset
@@ -33,13 +34,28 @@ from src.features.extractor import clahe_enhancement
 from src.utils import load_config, get_device
 
 
+# Model configurations (must match finetune_dinov2_lora.py)
+MODEL_CONFIGS = {
+    "dinov2": {
+        "model_id": "facebook/dinov2-with-registers-large",
+        "processor": "image",  # AutoImageProcessor
+    },
+    "siglip2": {
+        "model_id": "google/siglip2-so400m-patch14-384",
+        "processor": "full",  # AutoProcessor
+    },
+}
+
+
 def parse_args():
-    parser = argparse.ArgumentParser(description="Extract embeddings from LoRA-adapted DINOv2")
+    parser = argparse.ArgumentParser(description="Extract embeddings from LoRA-adapted vision models")
+    parser.add_argument("--model", type=str, default="dinov2", choices=list(MODEL_CONFIGS.keys()),
+                        help="Model architecture (default: dinov2)")
     parser.add_argument("--config", type=str, default="configs/config.yaml")
-    parser.add_argument("--adapter-path", type=str, default="outputs/lora/lora_adapter",
-                        help="Path to saved LoRA adapter")
-    parser.add_argument("--output-path", type=str,
-                        default="outputs/segmented_embeddings/dinov2-vitl14-reg-lora_embeddings.npz")
+    parser.add_argument("--adapter-path", type=str, default=None,
+                        help="Path to saved LoRA adapter (default: outputs/lora/<model>/lora_adapter)")
+    parser.add_argument("--output-path", type=str, default=None,
+                        help="Output path (default: outputs/segmented_embeddings/<model>-lora_embeddings.npz)")
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--merge", action="store_true",
                         help="Merge LoRA weights into base model (slightly faster inference)")
@@ -55,42 +71,54 @@ def main():
     args = parse_args()
     device = get_device()
 
+    model_cfg = MODEL_CONFIGS[args.model]
+    model_id = model_cfg["model_id"]
+
     print(f"\n{'='*60}")
-    print("LORA-ADAPTED DINOv2 FEATURE EXTRACTION")
+    print(f"LORA-ADAPTED {args.model.upper()} FEATURE EXTRACTION")
     print(f"{'='*60}")
     print(f"Device: {device}")
 
     # Check cache
-    output_path = Path(args.output_path)
+    output_path = Path(args.output_path or f"outputs/segmented_embeddings/{args.model}-lora_embeddings.npz")
     if output_path.exists() and not args.force:
         print(f"\nCached embeddings found: {output_path}")
         print("Use --force to re-extract.")
         return
 
     # Load base model
-    model_id = "facebook/dinov2-with-registers-large"
     print(f"\nLoading base model: {model_id}")
     base_model = AutoModel.from_pretrained(model_id, torch_dtype=torch.float32)
 
     # Load LoRA adapter
-    adapter_path = Path(args.adapter_path)
+    adapter_path = Path(args.adapter_path or f"outputs/lora/{args.model}/lora_adapter")
     if not adapter_path.exists():
         print(f"Error: Adapter not found at {adapter_path}")
         print("Run finetune_dinov2_lora.py first.")
         sys.exit(1)
 
     print(f"Loading LoRA adapter from: {adapter_path}")
-    model = PeftModel.from_pretrained(base_model, str(adapter_path))
-
-    if args.merge:
-        print("Merging LoRA weights into base model...")
-        model = model.merge_and_unload()
+    if args.model == "siglip2":
+        # LoRA was applied to vision_model only during fine-tuning
+        base_model.vision_model = PeftModel.from_pretrained(base_model.vision_model, str(adapter_path))
+        if args.merge:
+            print("Merging LoRA weights into base model...")
+            base_model.vision_model = base_model.vision_model.merge_and_unload()
+        model = base_model
+    else:
+        model = PeftModel.from_pretrained(base_model, str(adapter_path))
+        if args.merge:
+            print("Merging LoRA weights into base model...")
+            model = model.merge_and_unload()
 
     model = model.to(device)
     model.eval()
 
-    # Processor (same as frozen DINOv2)
-    processor = AutoImageProcessor.from_pretrained(model_id)
+    # Processor
+    if model_cfg["processor"] == "image":
+        processor = AutoImageProcessor.from_pretrained(model_id)
+    else:
+        processor = AutoProcessor.from_pretrained(model_id).image_processor
 
     apply_clahe = args.clahe
     repeat_clahe = args.repeat_clahe
@@ -125,11 +153,19 @@ def main():
     with torch.inference_mode():
         for images, labels in tqdm(dataloader, desc="Extracting"):
             images = images.to(device)
-            outputs = model(pixel_values=images)
-            hidden = outputs.last_hidden_state
 
-            cls_features = hidden[:, 0, :]
-            patch_features = hidden[:, 1:, :]
+            if args.model == "siglip2":
+                outputs = model.vision_model(pixel_values=images)
+                hidden = outputs.last_hidden_state
+                # SigLIP2 has no CLS token; use pooler_output as "cls" and all patches
+                cls_features = outputs.pooler_output
+                patch_features = hidden
+            else:
+                outputs = model(pixel_values=images)
+                hidden = outputs.last_hidden_state
+                cls_features = hidden[:, 0, :]
+                patch_features = hidden[:, 1:, :]
+
             mean_pool_features = patch_features.mean(dim=1)
 
             # L2 normalize

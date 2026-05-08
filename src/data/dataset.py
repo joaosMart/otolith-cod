@@ -152,6 +152,7 @@ class OtolithDataset(Dataset):
                             continue
                     samples.append((img_path, clipped_age))
 
+        samples.sort(key=lambda s: s[0].name)
         return samples
 
     def __len__(self) -> int:
