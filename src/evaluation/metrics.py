@@ -135,3 +135,54 @@ def compare_models_significance(
         "mean_difference": mean_diff,
         "model2_better": mean_diff > 0,
     }
+
+
+def bootstrap_metrics(
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    n_bootstrap: int = 1000,
+    ci: float = 0.95,
+    seed: int = 42,
+) -> Dict[str, Dict[str, float]]:
+    """
+    Compute bootstrap confidence intervals for classification metrics.
+
+    Resamples test predictions with replacement and computes metrics on each
+    resample. Returns point estimate (original) and CI bounds.
+
+    Args:
+        y_true: True labels
+        y_pred: Predicted labels
+        n_bootstrap: Number of bootstrap resamples
+        ci: Confidence interval level (e.g. 0.95 for 95% CI)
+        seed: Random seed for reproducibility
+
+    Returns:
+        Dict with same keys as compute_classification_metrics. Each value is
+        {"mean": float, "ci_lower": float, "ci_upper": float}.
+    """
+    rng = np.random.default_rng(seed)
+    n = len(y_true)
+    alpha = (1 - ci) / 2
+
+    # Point estimate on full test set
+    point_metrics = compute_classification_metrics(y_true, y_pred)
+
+    # Bootstrap resamples
+    bootstrap_values = {key: [] for key in point_metrics}
+    for _ in range(n_bootstrap):
+        idx = rng.integers(0, n, size=n)
+        sample_metrics = compute_classification_metrics(y_true[idx], y_pred[idx])
+        for key, val in sample_metrics.items():
+            bootstrap_values[key].append(val)
+
+    result = {}
+    for key in point_metrics:
+        values = np.array(bootstrap_values[key])
+        result[key] = {
+            "mean": point_metrics[key],
+            "ci_lower": float(np.percentile(values, alpha * 100)),
+            "ci_upper": float(np.percentile(values, (1 - alpha) * 100)),
+        }
+
+    return result

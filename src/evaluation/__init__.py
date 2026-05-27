@@ -10,6 +10,7 @@ from .metrics import (
     aggregate_fold_results,
     format_results_table,
     compare_models_significance,
+    bootstrap_metrics,
 )
 
 from .error_analysis import (
@@ -59,6 +60,7 @@ __all__ = [
     "aggregate_fold_results",
     "format_results_table",
     "compare_models_significance",
+    "bootstrap_metrics",
     # Error analysis
     "identify_misclassified_samples",
     "get_large_errors",
