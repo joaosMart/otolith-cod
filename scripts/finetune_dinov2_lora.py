@@ -35,7 +35,7 @@ from peft import LoraConfig, get_peft_model
 from coral_pytorch.dataset import corn_label_from_logits
 from coral_pytorch.losses import corn_loss
 
-from src.data import OtolithDataset
+from src.data import OtolithDataset, save_split_by_ids
 from src.features.extractor import clahe_enhancement
 from src.utils import load_config, get_device
 
@@ -124,7 +124,7 @@ def build_augmentation_transform(processor, apply_clahe=True, repeat_clahe=True)
     train_transform = transforms.Compose([
         *clahe_step,
         transforms.RandomHorizontalFlip(p=0.5),
-        transforms.RandomAffine(degrees=15, scale=(0.8, 1.2)),
+        transforms.RandomAffine(degrees=15, scale=(0.85, 1.15)),
         transforms.RandomApply([
             transforms.GaussianBlur(kernel_size=5, sigma=(0.1, 1.0))
         ], p=0.5),
@@ -481,9 +481,19 @@ def main():
     with open(output_dir / "training_info.json", "w") as f:
         json.dump(training_info, f, indent=2)
 
+    # Save fixed split in shared format (compatible with train_classifier.py --split-file)
+    split_dict = {
+        "seed": args.seed,
+        "test_ratio": 0.15,
+        "train_measurement_ids": [all_measurement_ids[i] for i in train_pool_idx],
+        "test_measurement_ids": [all_measurement_ids[i] for i in _test_idx],
+    }
+    save_split_by_ids(str(output_dir / "split.json"), split_dict)
+
     print(f"\nLoRA adapter saved to: {output_dir / 'lora_adapter'}")
     print(f"CORN head saved to:    {output_dir / 'corn_head.pt'}")
     print(f"Training info saved to: {output_dir / 'training_info.json'}")
+    print(f"Split info saved to:    {output_dir / 'split.json'}")
 
 
 if __name__ == "__main__":
