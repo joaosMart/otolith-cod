@@ -11,7 +11,9 @@ Paper methodology:
 Based on: Sigurðardóttir et al. (2023) - Ecological Informatics
 """
 
+import json
 import numpy as np
+from pathlib import Path
 from sklearn.model_selection import StratifiedKFold, StratifiedShuffleSplit, train_test_split
 from typing import List, Optional
 from dataclasses import dataclass
@@ -142,3 +144,53 @@ def create_train_test_splits(
         )
 
     return splits
+
+
+def create_fixed_split(
+    labels: np.ndarray,
+    measurement_ids: np.ndarray,
+    test_ratio: float = 0.15,
+    seed: int = 42,
+) -> dict:
+    """Create a single stratified train/test split, returned as measurement IDs."""
+    sss = StratifiedShuffleSplit(n_splits=1, test_size=test_ratio, random_state=seed)
+    train_idx, test_idx = next(sss.split(np.arange(len(labels)), labels))
+    return {
+        "seed": seed,
+        "test_ratio": test_ratio,
+        "train_measurement_ids": measurement_ids[train_idx].tolist(),
+        "test_measurement_ids": measurement_ids[test_idx].tolist(),
+    }
+
+
+def save_split_by_ids(path: str, split_dict: dict) -> None:
+    """Save a fixed split (by measurement IDs) to JSON."""
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with open(p, "w") as f:
+        json.dump(split_dict, f, indent=2)
+    print(f"Saved fixed split to {p}")
+
+
+def load_split_by_ids(path: str, measurement_ids: np.ndarray) -> DataSplit:
+    """Load a fixed split from JSON and map measurement IDs to current array indices."""
+    with open(path, "r") as f:
+        data = json.load(f)
+
+    id_to_idx = {int(mid): i for i, mid in enumerate(measurement_ids)}
+
+    train_ids = data["train_measurement_ids"]
+    test_ids = data["test_measurement_ids"]
+
+    missing_train = [mid for mid in train_ids if mid not in id_to_idx]
+    missing_test = [mid for mid in test_ids if mid not in id_to_idx]
+    if missing_train or missing_test:
+        raise ValueError(
+            f"Split file references {len(missing_train)} train and "
+            f"{len(missing_test)} test measurement IDs not found in embeddings."
+        )
+
+    train_indices = np.array([id_to_idx[mid] for mid in train_ids])
+    test_indices = np.array([id_to_idx[mid] for mid in test_ids])
+
+    return DataSplit(train_indices=train_indices, test_indices=test_indices, fold=0)

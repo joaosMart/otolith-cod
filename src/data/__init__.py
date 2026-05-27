@@ -7,7 +7,14 @@ Provides:
 """
 
 from .dataset import OtolithDataset, SUPPORTED_DATA
-from .splits import DataSplit, create_kfold_splits, create_train_test_splits
+from .splits import (
+    DataSplit,
+    create_kfold_splits,
+    create_train_test_splits,
+    create_fixed_split,
+    save_split_by_ids,
+    load_split_by_ids,
+)
 
 __all__ = [
     "OtolithDataset",
@@ -15,4 +22,7 @@ __all__ = [
     "DataSplit",
     "create_kfold_splits",
     "create_train_test_splits",
+    "create_fixed_split",
+    "save_split_by_ids",
+    "load_split_by_ids",
 ]
