@@ -24,9 +24,9 @@ import pandas as pd
 from tqdm import tqdm
 
 from src.features import load_cached_embeddings, augment_embeddings
-from src.data import create_train_test_splits
+from src.data import create_train_test_splits, create_fixed_split, save_split_by_ids, load_split_by_ids, DataSplit
 from src.training import run_experiment_with_search, save_splits
-from src.evaluation import compute_classification_metrics, aggregate_fold_results
+from src.evaluation import compute_classification_metrics, aggregate_fold_results, bootstrap_metrics
 from src.utils import load_config
 
 
@@ -55,7 +55,7 @@ def parse_args():
     parser.add_argument("--alpha-steps", type=int, default=30, help="Number of alpha values in RidgeCV (default: 30)")
     parser.add_argument("--cv-folds", type=int, default=5, help="Number of CV folds for RidgeCV (default: 5)")
     parser.add_argument("--random-state", type=int, default=42, help="Base random state (default: 42, used when --seeds not set)")
-    parser.add_argument("--output-dir", type=str, default="outputs/results/shallow_siglip2", help="Directory for output files")
+    parser.add_argument("--output-dir", type=str, default=None, help="Directory for output files (default: outputs/results/shallow_siglip2/<eval-mode>)")
     parser.add_argument("--n-jobs", type=int, default=-1, help="Parallel jobs for GridSearchCV (-1 for all cores)")
     parser.add_argument("--metadata-csv", type=str, default="cod_otolith_age_final_with_scale.csv", help="Path to metadata CSV file")
     parser.add_argument(
@@ -71,18 +71,37 @@ def parse_args():
         default="length,month_sin,month_cos,shot_latitude,shot_longitude,is_survey,seg_width_px,seg_height_px,seg_aspect_ratio",
         help="Comma-separated list of tabular columns to add",
     )
+    parser.add_argument(
+        "--eval-mode",
+        type=str,
+        default="splits",
+        choices=["splits", "bootstrap"],
+        help="Evaluation mode: 'splits' for 10 independent splits (default), 'bootstrap' for single fixed split with bootstrap CIs",
+    )
+    parser.add_argument(
+        "--split-file",
+        type=str,
+        default=None,
+        help="Path to fixed split JSON (measurement IDs). Used with --eval-mode bootstrap. Created automatically if not provided.",
+    )
     return parser.parse_args()
 
 
-def format_results_summary(aggregated: dict, paper_reference: dict = None) -> str:
+def format_results_summary(aggregated: dict, eval_mode: str = "splits", paper_reference: dict = None) -> str:
     lines = [
         "=" * 60,
-        "RESULTS SUMMARY",
+        f"RESULTS SUMMARY (eval_mode={eval_mode})",
         "=" * 60,
         "",
-        "Test Set Metrics (mean +/- std across all experiments):",
-        "-" * 50,
     ]
+
+    if eval_mode == "bootstrap":
+        lines.append("Test Set Metrics (point estimate [95% CI]):")
+        lines.append("-" * 50)
+    else:
+        lines.append("Test Set Metrics (mean +/- std across all experiments):")
+        lines.append("-" * 50)
+
     metric_names = {
         "f1": "F1-Score (macro)",
         "accuracy": "Accuracy",
@@ -91,19 +110,94 @@ def format_results_summary(aggregated: dict, paper_reference: dict = None) -> st
         "recall": "Recall (macro)",
         "rmse_raw": "RMSE",
     }
+
     for key, display_name in metric_names.items():
-        if key in aggregated:
-            mean, std = aggregated[key]
-            if key in ["accuracy", "accuracy_pm1", "precision", "recall", "f1"]:
+        if key not in aggregated:
+            continue
+
+        val = aggregated[key]
+        is_pct = key in ["accuracy", "accuracy_pm1", "precision", "recall", "f1"]
+
+        if eval_mode == "bootstrap":
+            mean = val["mean"]
+            lo = val["ci_lower"]
+            hi = val["ci_upper"]
+            if is_pct:
+                lines.append(f"  {display_name:20s}: {mean*100:6.2f}% [{lo*100:.2f}, {hi*100:.2f}]")
+            else:
+                lines.append(f"  {display_name:20s}: {mean:6.3f} [{lo:.3f}, {hi:.3f}]")
+        else:
+            mean, std = val
+            if is_pct:
                 lines.append(f"  {display_name:20s}: {mean*100:6.2f} +/- {std*100:.2f}%")
             else:
                 lines.append(f"  {display_name:20s}: {mean:6.3f} +/- {std:.3f}")
+
     lines.append("=" * 60)
     return "\n".join(lines)
 
 
+def run_bootstrap_mode(args, features, labels, measurement_ids, alpha_range):
+    """Run single fixed split + bootstrap CI evaluation."""
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Load or create fixed split
+    if args.split_file and Path(args.split_file).exists():
+        print(f"\nLoading fixed split from {args.split_file}")
+        split = load_split_by_ids(args.split_file, measurement_ids)
+    else:
+        print("\nCreating fixed split (seed=42, 85/15)...")
+        split_dict = create_fixed_split(labels, measurement_ids, test_ratio=args.test_ratio, seed=42)
+        save_split_by_ids(str(output_dir / "split.json"), split_dict)
+        split = load_split_by_ids(str(output_dir / "split.json"), measurement_ids)
+
+    print(f"  Train: {len(split.train_indices)}, Test: {len(split.test_indices)}")
+
+    # Train Ridge once with RidgeCV
+    print(f"\nTraining Ridge with {args.cv_folds}-fold RidgeCV...")
+    result = run_experiment_with_search(
+        features=features,
+        labels=labels,
+        train_indices=split.train_indices,
+        test_indices=split.test_indices,
+        alpha_range=alpha_range,
+        cv_folds=args.cv_folds,
+        n_jobs=args.n_jobs,
+    )
+    result["experiment"] = 0
+
+    print(
+        f"  alpha={result['best_alpha']:.2f}, "
+        f"CV_MSE={result['best_cv_score']:.4f}, "
+        f"Test_Acc={result['test_metrics']['accuracy']*100:.2f}%, "
+        f"Test_F1={result['test_metrics']['f1']*100:.2f}%"
+    )
+
+    # Re-predict to get y_pred for bootstrap
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.linear_model import RidgeCV
+
+    scaler = StandardScaler()
+    X_train_s = scaler.fit_transform(features[split.train_indices])
+    X_test_s = scaler.transform(features[split.test_indices])
+    model = RidgeCV(alphas=alpha_range, cv=args.cv_folds)
+    model.fit(X_train_s, labels[split.train_indices])
+    y_test = labels[split.test_indices]
+    y_pred = np.clip(np.round(model.predict(X_test_s)).astype(int), 1, 10)
+
+    # Bootstrap CIs
+    print("\nBootstrapping test set (1000 resamples)...")
+    aggregated = bootstrap_metrics(y_test, y_pred, n_bootstrap=1000, ci=0.95)
+
+    return [result], aggregated, split
+
+
 def main():
     args = parse_args()
+
+    if args.output_dir is None:
+        args.output_dir = f"outputs/results/shallow_siglip2/{args.eval_mode}"
 
     print("\n" + "=" * 60)
     print("RIDGE CLASSIFIER TRAINING")
@@ -155,54 +249,66 @@ def main():
     alpha_range = np.logspace(args.alpha_log_min, args.alpha_log_max, args.alpha_steps)
     print(f"\nAlpha grid: {args.alpha_steps} values from {alpha_range[0]:.1f} to {alpha_range[-1]:.1f} (logspace)")
 
-    # Parse seeds
-    seeds = [int(s) for s in args.seeds.split(",")]
-    n_experiments = len(seeds)
+    eval_mode = args.eval_mode
 
-    # Create splits
-    print(f"\nCreating {n_experiments} independent splits (seeds: {seeds})...")
-    print(f"  Train/Test ratios: {args.train_ratio}/{args.test_ratio}")
+    if eval_mode == "bootstrap":
+        if measurement_ids is None:
+            print("Error: Embeddings missing measurement_ids. Re-extract with updated script.")
+            sys.exit(1)
 
-    splits = create_train_test_splits(
-        labels=labels,
-        train_ratio=args.train_ratio,
-        test_ratio=args.test_ratio,
-        seeds=seeds,
-    )
+        all_results, aggregated, split = run_bootstrap_mode(
+            args, features, labels, measurement_ids, alpha_range,
+        )
+        n_experiments = 1
+        test_metrics_list = [all_results[0]["test_metrics"]]
 
-    # Run experiments
-    print(f"\nRunning {n_experiments} experiments with {args.cv_folds}-fold RidgeCV...")
-    print("-" * 60)
+    else:
+        # Existing splits mode
+        seeds = [int(s) for s in args.seeds.split(",")]
+        n_experiments = len(seeds)
 
-    all_results = []
-    test_metrics_list = []
+        print(f"\nCreating {n_experiments} independent splits (seeds: {seeds})...")
+        print(f"  Train/Test ratios: {args.train_ratio}/{args.test_ratio}")
 
-    for split in tqdm(splits, desc="Experiments"):
-        result = run_experiment_with_search(
-            features=features,
+        splits = create_train_test_splits(
             labels=labels,
-            train_indices=split.train_indices,
-            test_indices=split.test_indices,
-            alpha_range=alpha_range,
-            cv_folds=args.cv_folds,
-            n_jobs=args.n_jobs,
-            random_state=split.fold,
-        )
-        result["experiment"] = split.fold
-        all_results.append(result)
-        test_metrics_list.append(result["test_metrics"])
-
-        print(
-            f"  Exp {result['experiment']:2d}: "
-            f"alpha={result['best_alpha']:.2f}, "
-            f"CV_MSE={result['best_cv_score']:.4f}, "
-            f"Test_Acc={result['test_metrics']['accuracy']*100:.2f}%, "
-            f"Test_F1={result['test_metrics']['f1']*100:.2f}%"
+            train_ratio=args.train_ratio,
+            test_ratio=args.test_ratio,
+            seeds=seeds,
         )
 
-    # Aggregate
-    aggregated = aggregate_fold_results(test_metrics_list)
-    print("\n" + format_results_summary(aggregated, paper_reference))
+        print(f"\nRunning {n_experiments} experiments with {args.cv_folds}-fold RidgeCV...")
+        print("-" * 60)
+
+        all_results = []
+        test_metrics_list = []
+
+        for split in tqdm(splits, desc="Experiments"):
+            result = run_experiment_with_search(
+                features=features,
+                labels=labels,
+                train_indices=split.train_indices,
+                test_indices=split.test_indices,
+                alpha_range=alpha_range,
+                cv_folds=args.cv_folds,
+                n_jobs=args.n_jobs,
+                random_state=split.fold,
+            )
+            result["experiment"] = split.fold
+            all_results.append(result)
+            test_metrics_list.append(result["test_metrics"])
+
+            print(
+                f"  Exp {result['experiment']:2d}: "
+                f"alpha={result['best_alpha']:.2f}, "
+                f"CV_MSE={result['best_cv_score']:.4f}, "
+                f"Test_Acc={result['test_metrics']['accuracy']*100:.2f}%, "
+                f"Test_F1={result['test_metrics']['f1']*100:.2f}%"
+            )
+
+        aggregated = aggregate_fold_results(test_metrics_list)
+
+    print("\n" + format_results_summary(aggregated, eval_mode=eval_mode))
 
     # Save outputs
     output_dir = Path(args.output_dir)
@@ -211,13 +317,13 @@ def main():
 
     # Results JSON
     full_results = {
+        "eval_mode": eval_mode,
         "timestamp": timestamp,
         "config": {
             "embeddings_path": args.embeddings,
             "feature_key": used_feature_key,
             "add_tabular": args.add_tabular,
             "tabular_columns": args.tabular_columns.split(",") if args.add_tabular else [],
-            "seeds": seeds,
             "n_experiments": n_experiments,
             "train_ratio": args.train_ratio,
             "test_ratio": args.test_ratio,
@@ -227,11 +333,23 @@ def main():
             "cv_folds": args.cv_folds,
         },
         "experiment_results": all_results,
-        "aggregated_results": {
+    }
+
+    if eval_mode == "bootstrap":
+        full_results["aggregated_results"] = aggregated
+        full_results["bootstrap"] = {
+            "n_bootstrap": 1000,
+            "ci_level": 0.95,
+            "seed": 42,
+        }
+        if args.split_file:
+            full_results["config"]["split_file"] = args.split_file
+    else:
+        full_results["config"]["seeds"] = seeds
+        full_results["aggregated_results"] = {
             key: {"mean": float(mean), "std": float(std)}
             for key, (mean, std) in aggregated.items()
-        },
-    }
+        }
 
     results_file = output_dir / "results.json"
     with open(results_file, "w") as f:
@@ -252,23 +370,33 @@ def main():
             row[f"test_{key}"] = value
         summary_rows.append(row)
 
-    agg_row = {
-        "experiment": "MEAN+/-STD",
-        "best_alpha": np.mean([r["best_alpha"] for r in all_results]),
-    }
-    for key, (mean, std) in aggregated.items():
-        agg_row[f"test_{key}"] = f"{mean:.4f}+/-{std:.4f}"
-    summary_rows.append(agg_row)
+    if eval_mode == "splits":
+        agg_row = {
+            "experiment": "MEAN+/-STD",
+            "best_alpha": np.mean([r["best_alpha"] for r in all_results]),
+        }
+        for key, (mean, std) in aggregated.items():
+            agg_row[f"test_{key}"] = f"{mean:.4f}+/-{std:.4f}"
+        summary_rows.append(agg_row)
+    else:
+        agg_row = {
+            "experiment": "BOOTSTRAP_CI",
+            "best_alpha": all_results[0]["best_alpha"],
+        }
+        for key, val in aggregated.items():
+            agg_row[f"test_{key}"] = f"{val['mean']:.4f} [{val['ci_lower']:.4f}, {val['ci_upper']:.4f}]"
+        summary_rows.append(agg_row)
 
     summary_df = pd.DataFrame(summary_rows)
     summary_file = output_dir / "summary.csv"
     summary_df.to_csv(summary_file, index=False)
     print(f"Summary saved to: {summary_file}")
 
-    # Save splits
-    save_splits(splits, str(output_dir / "splits.json"), args.random_state)
+    # Save splits (only for splits mode; bootstrap saves split in run_bootstrap_mode)
+    if eval_mode == "splits":
+        save_splits(splits, str(output_dir / "splits.json"), args.random_state)
 
-    print("\nTraining complete!")
+    print(f"\nTraining complete! (eval_mode={eval_mode})")
 
 
 if __name__ == "__main__":
