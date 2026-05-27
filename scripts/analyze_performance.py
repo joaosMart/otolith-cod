@@ -97,22 +97,32 @@ def main():
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    figures_dir = output_dir / "figures"
-    figures_dir.mkdir(parents=True, exist_ok=True)
 
     # Load results
     results = load_results(args.results)
+    eval_mode = results.get("eval_mode", "splits")
+    print(f"  Eval mode: {eval_mode}")
     config = results["config"]
+
+    figures_dir = output_dir / "figures" / eval_mode
+    figures_dir.mkdir(parents=True, exist_ok=True)
 
     # Print aggregated results
     print("\n" + "-" * 60)
-    print("AGGREGATED RESULTS")
+    print(f"AGGREGATED RESULTS (eval_mode={eval_mode})")
     print("-" * 60)
     agg = results["aggregated_results"]
-    print(f"Test Macro F1:      {agg['f1']['mean']*100:.2f} +/- {agg['f1']['std']*100:.2f}%")
-    print(f"Test Accuracy:      {agg['accuracy']['mean']*100:.2f} +/- {agg['accuracy']['std']*100:.2f}%")
-    print(f"Test +/-1 Accuracy: {agg['accuracy_pm1']['mean']*100:.2f} +/- {agg['accuracy_pm1']['std']*100:.2f}%")
-    print(f"Test RMSE:          {agg['rmse']['mean']:.3f} +/- {agg['rmse']['std']:.3f}")
+
+    if eval_mode == "bootstrap":
+        print(f"Test Macro F1:      {agg['f1']['mean']*100:.2f}% [{agg['f1']['ci_lower']*100:.2f}, {agg['f1']['ci_upper']*100:.2f}]")
+        print(f"Test Accuracy:      {agg['accuracy']['mean']*100:.2f}% [{agg['accuracy']['ci_lower']*100:.2f}, {agg['accuracy']['ci_upper']*100:.2f}]")
+        print(f"Test +/-1 Accuracy: {agg['accuracy_pm1']['mean']*100:.2f}% [{agg['accuracy_pm1']['ci_lower']*100:.2f}, {agg['accuracy_pm1']['ci_upper']*100:.2f}]")
+        print(f"Test RMSE:          {agg['rmse']['mean']:.3f} [{agg['rmse']['ci_lower']:.3f}, {agg['rmse']['ci_upper']:.3f}]")
+    else:
+        print(f"Test Macro F1:      {agg['f1']['mean']*100:.2f} +/- {agg['f1']['std']*100:.2f}%")
+        print(f"Test Accuracy:      {agg['accuracy']['mean']*100:.2f} +/- {agg['accuracy']['std']*100:.2f}%")
+        print(f"Test +/-1 Accuracy: {agg['accuracy_pm1']['mean']*100:.2f} +/- {agg['accuracy_pm1']['std']*100:.2f}%")
+        print(f"Test RMSE:          {agg['rmse']['mean']:.3f} +/- {agg['rmse']['std']:.3f}")
 
     if not args.embeddings:
         print("\nNo embeddings provided. Skipping visualizations.")
@@ -152,34 +162,53 @@ def main():
             print(f"  Warning: Could not augment embeddings: {e}")
             print("  Proceeding with original embeddings.")
 
-    # Load or recreate splits
-    splits_path = args.splits
-    if splits_path is None:
-        # Try to find splits.json next to results.json
-        candidate = Path(args.results).parent / "splits.json"
-        if candidate.exists():
-            splits_path = str(candidate)
+    # Load or recreate splits based on eval mode
+    if eval_mode == "bootstrap":
+        # Single fixed split — load from split.json
+        from src.data import load_split_by_ids
 
-    if splits_path and Path(splits_path).exists():
-        print(f"\nLoading splits from {splits_path}")
-        splits = load_splits(splits_path)
+        split_path = args.splits
+        if split_path is None:
+            candidate = Path(args.results).parent / "split.json"
+            if candidate.exists():
+                split_path = str(candidate)
+
+        if split_path is None or not Path(split_path).exists():
+            print("Error: No split.json found for bootstrap mode. Expected next to results.json.")
+            sys.exit(1)
+
+        print(f"\nLoading fixed split from {split_path}")
+        split = load_split_by_ids(split_path, measurement_ids)
+        experiment_alphas = [results["experiment_results"][0]["best_alpha"]]
+        splits = [split]
+
     else:
-        print("\nRecreating splits from config parameters...")
-        splits = create_train_val_test_splits(
-            labels=labels,
-            n_experiments=config["n_experiments"],
-            train_ratio=config["train_ratio"],
-            val_ratio=config["val_ratio"],
-            test_ratio=config["test_ratio"],
-            random_state=config["random_state"],
-        )
+        # Existing splits mode
+        splits_path = args.splits
+        if splits_path is None:
+            candidate = Path(args.results).parent / "splits.json"
+            if candidate.exists():
+                splits_path = str(candidate)
+
+        if splits_path and Path(splits_path).exists():
+            print(f"\nLoading splits from {splits_path}")
+            splits = load_splits(splits_path)
+        else:
+            print("\nRecreating splits from config parameters...")
+            splits = create_train_test_splits(
+                labels=labels,
+                n_experiments=config["n_experiments"],
+                train_ratio=config["train_ratio"],
+                test_ratio=config["test_ratio"],
+                random_state=config.get("random_state", 42),
+            )
+        experiment_alphas = [r["best_alpha"] for r in results["experiment_results"]]
 
     # Generate predictions
     print("\n" + "=" * 60)
     print("GENERATING PREDICTIONS FOR VISUALIZATION")
     print("=" * 60)
 
-    experiment_alphas = [r["best_alpha"] for r in results["experiment_results"]]
     print(f"Using per-experiment alphas: {[f'{a:.1f}' for a in experiment_alphas]}")
 
     all_y_true = []
