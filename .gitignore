@@ -39,7 +39,24 @@ Thumbs.db
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Model weights
 *.pt
 *.pth
-*.pt
-*.pth
+
+# Data files (root-level)
+/annotation.csv
+
+# Documents not part of the codebase
+/*.pdf
+/*.pptx
+
+# Paper (managed separately via Overleaf)
+paper/
+
+# Agent/planning docs
+Claude.md
+docs/superpowers/
+
+# Lock files
+uv.lock

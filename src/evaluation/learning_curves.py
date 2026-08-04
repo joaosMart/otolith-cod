@@ -114,15 +114,105 @@ def compute_learning_curve(
     return results
 
 
+def _bootstrap_learning_curve(
+    features: np.ndarray,
+    labels: np.ndarray,
+    split: DataSplit,
+    train_fractions: Optional[List[float]] = None,
+    alpha: float = 0.1,
+    n_bootstrap: int = 1000,
+    random_state: int = 42,
+) -> Dict[str, np.ndarray]:
+    """
+    Compute learning curve with bootstrap confidence intervals on the test set.
+
+    For each training fraction, trains a single model on a stratified subset,
+    then bootstraps the test set (sampling with replacement) to estimate
+    uncertainty in the metrics.
+
+    Returns:
+        Dictionary with arrays of shape (n_fractions,) for mean/std of each metric.
+    """
+    if train_fractions is None:
+        train_fractions = [0.02, 0.04, 0.06, 0.08, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+
+    X_train_raw = features[split.train_indices]
+    y_train = labels[split.train_indices]
+    X_test_raw = features[split.test_indices]
+    y_test = labels[split.test_indices]
+
+    scaler = StandardScaler()
+    X_train = scaler.fit_transform(X_train_raw)
+    X_test = scaler.transform(X_test_raw)
+
+    rng = np.random.RandomState(random_state)
+    n_test = len(y_test)
+
+    train_sizes = []
+    acc_mean, acc_std = [], []
+    acc_pm1_mean, acc_pm1_std = [], []
+    f1_mean, f1_std = [], []
+
+    for fraction in tqdm(train_fractions, desc="Learning curve fractions"):
+        # Stratified subsampling of training set
+        unique_classes = np.unique(y_train)
+        subset_indices = []
+        for cls in unique_classes:
+            cls_indices = np.where(y_train == cls)[0]
+            n_cls_samples = max(1, int(len(cls_indices) * fraction))
+            sampled = rng.choice(cls_indices, size=n_cls_samples, replace=False)
+            subset_indices.extend(sampled)
+        subset_indices = np.array(subset_indices)
+
+        # Train model once on this fraction
+        model = Ridge(alpha=alpha)
+        model.fit(X_train[subset_indices], y_train[subset_indices])
+
+        # Predict on full test set once
+        y_pred = np.clip(np.round(model.predict(X_test)).astype(int), 1, 10)
+
+        # Bootstrap resample the test predictions
+        boot_acc, boot_acc_pm1, boot_f1 = [], [], []
+        for _ in range(n_bootstrap):
+            idx = rng.choice(n_test, size=n_test, replace=True)
+            metrics = compute_classification_metrics(y_test[idx], y_pred[idx])
+            boot_acc.append(metrics["accuracy"])
+            boot_acc_pm1.append(metrics["accuracy_pm1"])
+            boot_f1.append(metrics["f1"])
+
+        train_sizes.append(len(subset_indices))
+        acc_mean.append(np.mean(boot_acc))
+        acc_std.append(np.std(boot_acc))
+        acc_pm1_mean.append(np.mean(boot_acc_pm1))
+        acc_pm1_std.append(np.std(boot_acc_pm1))
+        f1_mean.append(np.mean(boot_f1))
+        f1_std.append(np.std(boot_f1))
+
+    return {
+        "train_sizes": np.array(train_sizes),
+        "test_accuracy_mean": np.array(acc_mean),
+        "test_accuracy_std": np.array(acc_std),
+        "test_accuracy_pm1_mean": np.array(acc_pm1_mean),
+        "test_accuracy_pm1_std": np.array(acc_pm1_std),
+        "test_f1_mean": np.array(f1_mean),
+        "test_f1_std": np.array(f1_std),
+    }
+
+
 def run_learning_curve_experiment(
     features: np.ndarray,
     labels: np.ndarray,
     splits: List[DataSplit],
     train_fractions: Optional[List[float]] = None,
     alpha: float = 0.1,
+    n_bootstrap: int = 1000,
 ) -> Dict[str, np.ndarray]:
     """
-    Run learning curve analysis across multiple data splits.
+    Run learning curve analysis.
+
+    When multiple splits are provided, runs one learning curve per split and
+    aggregates across splits. When a single split is provided (bootstrap mode),
+    uses bootstrap resampling of the test set to estimate confidence intervals.
 
     Args:
         features: Feature matrix (N, D)
@@ -130,19 +220,24 @@ def run_learning_curve_experiment(
         splits: List of DataSplit objects
         train_fractions: List of training data fractions
         alpha: Ridge regularization parameter
+        n_bootstrap: Number of bootstrap resamples for single-split mode
 
     Returns:
-        Dictionary with aggregated results across splits:
+        Dictionary with aggregated results:
             - train_sizes: Array of training sizes (n_fractions,)
-            - test_accuracy_mean: Mean test accuracy (n_fractions,)
-            - test_accuracy_std: Std test accuracy (n_fractions,)
-            - test_accuracy_pm1_mean: Mean ±1 accuracy (n_fractions,)
-            - test_accuracy_pm1_std: Std ±1 accuracy (n_fractions,)
-            - test_f1_mean: Mean F1 score (n_fractions,)
-            - test_f1_std: Std F1 score (n_fractions,)
+            - test_{metric}_mean/std for accuracy, accuracy_pm1, f1
     """
-    all_results = []
+    if len(splits) == 1:
+        return _bootstrap_learning_curve(
+            features=features,
+            labels=labels,
+            split=splits[0],
+            train_fractions=train_fractions,
+            alpha=alpha,
+            n_bootstrap=n_bootstrap,
+        )
 
+    all_results = []
     for split in tqdm(splits, desc="Computing learning curves"):
         result = compute_learning_curve(
             features=features,
@@ -252,6 +347,7 @@ def plot_multiple_learning_curves(
     figsize: Tuple[int, int] = (15, 5),
     save_path: Optional[Path] = None,
     dpi: int = 300,
+    log_scale: bool = False,
 ) -> plt.Figure:
     """
     Plot multiple learning curves side by side.
@@ -303,6 +399,9 @@ def plot_multiple_learning_curves(
         ax.set_title(metric_names[metric], fontsize=12, fontweight="bold")
         ax.legend(loc="best", fontsize=9)
         ax.grid(alpha=0.3)
+
+        if log_scale:
+            ax.set_xscale("log")
 
         if metric in ["accuracy", "accuracy_pm1", "f1"]:
             ax.set_ylim([0, 1.05])

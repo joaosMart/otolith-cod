@@ -25,7 +25,7 @@ from sklearn.linear_model import RidgeCV
 from sklearn.preprocessing import StandardScaler
 
 from src.features import load_cached_embeddings, augment_embeddings
-from src.data import create_train_test_splits
+from src.data import create_train_test_splits, load_split_by_ids
 from src.evaluation.feature_importance import (
     build_feature_groups,
     compute_shap_values,
@@ -89,6 +89,8 @@ def parse_args():
     parser.add_argument("--alpha-steps", type=int, default=30)
     parser.add_argument("--cv-folds", type=int, default=5)
     parser.add_argument("--perm-repeats", type=int, default=10)
+    parser.add_argument("--split-file", type=str, default=None,
+                        help="Path to fixed split JSON (measurement IDs). Uses this single split instead of multiple random splits.")
     return parser.parse_args()
 
 
@@ -145,13 +147,18 @@ def main():
     alpha_range = np.logspace(args.alpha_log_min, args.alpha_log_max, args.alpha_steps)
 
     # Create splits
-    splits = create_train_test_splits(
-        labels=labels,
-        train_ratio=args.train_ratio,
-        test_ratio=args.test_ratio,
-        seeds=seeds,
-    )
-    print(f"  Splits: {len(splits)} independent experiments")
+    if args.split_file:
+        print(f"  Loading fixed split from {args.split_file}")
+        split = load_split_by_ids(args.split_file, measurement_ids)
+        splits = [split]
+    else:
+        splits = create_train_test_splits(
+            labels=labels,
+            train_ratio=args.train_ratio,
+            test_ratio=args.test_ratio,
+            seeds=seeds,
+        )
+    print(f"  Splits: {len(splits)} experiment(s)")
 
     # Feature groups
     feature_groups = build_feature_groups(embedding_dim)

@@ -64,6 +64,7 @@ def parse_args():
     parser.add_argument("--splits", type=str, help="Path to splits.json (default: same dir as results)")
     parser.add_argument("--output-dir", type=str, default="outputs/analysis", help="Output directory for figures and reports")
     parser.add_argument("--learning-curves", action="store_true", help="Compute learning curves (requires --embeddings)")
+    parser.add_argument("--log-scale", action="store_true", help="Use logarithmic scale for the x-axis of learning curves")
     parser.add_argument("--cleanlab", action="store_true", help="Run data quality analysis with cleanlab (requires --embeddings)")
     parser.add_argument("--dpi", type=int, default=300, help="DPI for saved figures (default: 300)")
     parser.add_argument("--random-state", type=int, default=42, help="Random state for reproducibility")
@@ -317,7 +318,7 @@ def main():
         )
         plot_multiple_learning_curves(
             results=lc_results, metrics=["f1", "accuracy", "accuracy_pm1"],
-            save_path=figures_dir / "learning_curves.png", dpi=args.dpi,
+            save_path=figures_dir / "learning_curves.png", dpi=args.dpi, log_scale=args.log_scale,
         )
         print(f"Saved learning curves to {figures_dir / 'learning_curves.png'}")
 

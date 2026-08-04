@@ -185,6 +185,8 @@ def extract_features(
             else:
                 # clip/siglip families use get_image_features
                 features = model.get_image_features(pixel_values=images)
+                if not isinstance(features, torch.Tensor):
+                    features = features.pooler_output if hasattr(features, 'pooler_output') else features.last_hidden_state[:, 0, :]
                 if normalize:
                     features = F.normalize(features, p=2, dim=-1, eps=1e-8)
                 collectors.setdefault("features", []).append(features.cpu().numpy())

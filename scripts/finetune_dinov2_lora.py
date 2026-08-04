@@ -79,6 +79,8 @@ def parse_args():
                         help="Apply CLAHE twice for stronger effect")
     parser.add_argument("--output-dir", type=str, default=None,
                         help="Output directory (default: outputs/lora/<model>)")
+    parser.add_argument("--split-file", type=str, default=None,
+                        help="Path to fixed split JSON (measurement IDs). Ensures same train/test split as frozen encoders.")
     return parser.parse_args()
 
 
@@ -344,10 +346,19 @@ def main():
     print(f"\nDataset: {len(full_dataset)} images")
     print(f"Class distribution: {full_dataset.get_class_counts()}")
 
-    # Split: use the same 85/15 train/test split as the main pipeline,
-    # then split the 85% training portion into 80/20 for FT-train/FT-val
-    sss_outer = StratifiedShuffleSplit(n_splits=1, test_size=0.15, random_state=args.seed)
-    train_pool_idx, _test_idx = next(sss_outer.split(np.arange(len(labels)), labels))
+    # Split: 85/15 train/test, then split training into FT-train/FT-val
+    if args.split_file:
+        # Load pre-defined split from file (ensures same split as frozen encoders)
+        import json
+        print(f"\nLoading split from {args.split_file}")
+        with open(args.split_file, "r") as f:
+            split_data = json.load(f)
+        mid_to_idx = {mid: i for i, mid in enumerate(all_measurement_ids)}
+        train_pool_idx = np.array([mid_to_idx[mid] for mid in split_data["train_measurement_ids"]])
+        _test_idx = np.array([mid_to_idx[mid] for mid in split_data["test_measurement_ids"]])
+    else:
+        sss_outer = StratifiedShuffleSplit(n_splits=1, test_size=0.15, random_state=args.seed)
+        train_pool_idx, _test_idx = next(sss_outer.split(np.arange(len(labels)), labels))
 
     train_pool_labels = labels[train_pool_idx]
     sss_inner = StratifiedShuffleSplit(

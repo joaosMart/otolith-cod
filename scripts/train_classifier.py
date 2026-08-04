@@ -84,6 +84,7 @@ def parse_args():
         default=None,
         help="Path to fixed split JSON (measurement IDs). Used with --eval-mode bootstrap. Created automatically if not provided.",
     )
+    parser.add_argument("--n-bootstrap", type=int, default=1000, help="Number of bootstrap resamples (default: 1000)")
     return parser.parse_args()
 
 
@@ -187,8 +188,8 @@ def run_bootstrap_mode(args, features, labels, measurement_ids, alpha_range):
     y_pred = np.clip(np.round(model.predict(X_test_s)).astype(int), 1, 10)
 
     # Bootstrap CIs
-    print("\nBootstrapping test set (1000 resamples)...")
-    aggregated = bootstrap_metrics(y_test, y_pred, n_bootstrap=1000, ci=0.95)
+    print(f"\nBootstrapping test set ({args.n_bootstrap} resamples)...")
+    aggregated = bootstrap_metrics(y_test, y_pred, n_bootstrap=args.n_bootstrap, ci=0.95)
 
     return [result], aggregated, split
 
@@ -338,7 +339,7 @@ def main():
     if eval_mode == "bootstrap":
         full_results["aggregated_results"] = aggregated
         full_results["bootstrap"] = {
-            "n_bootstrap": 1000,
+            "n_bootstrap": args.n_bootstrap,
             "ci_level": 0.95,
             "seed": 42,
         }
