@@ -60,3 +60,6 @@ docs/superpowers/
 
 # Lock files
 uv.lock
+
+# Symlink to the image store, created by setup
+otolith_images/
