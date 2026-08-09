@@ -50,6 +50,10 @@ def parse_args():
     p.add_argument("--config", default="configs/config.yaml")
     p.add_argument("--adapter", default=None,
                    help="Path to a saved PEFT adapter. Omit for the frozen encoder.")
+    p.add_argument("--state-dict", default=None,
+                   help="Path to a full fine-tuned encoder state dict. Used for "
+                        "--mode full, which trains every weight and therefore "
+                        "saves a state dict rather than an adapter directory.")
     p.add_argument("--merge", action="store_true",
                    help="Fold adapter weights into the base weights before extraction. "
                         "Mathematically equivalent, marginally faster.")
@@ -81,11 +85,11 @@ def build_output_path(args, preprocess: PreprocessConfig) -> Path:
     slug = preprocess.slug()
     if slug:
         parts.append(slug)
-    if args.adapter:
-        # Carry the run name through, so embeddings from two different adapters
-        # are distinguishable at a glance and can never collide.
-        adapter_path = Path(args.adapter)
-        run = adapter_path.parent.name if adapter_path.name == "adapter" else adapter_path.name
+    if args.adapter or args.state_dict:
+        # Carry the run name through, so embeddings from two different runs are
+        # distinguishable at a glance and can never collide.
+        path = Path(args.adapter or args.state_dict)
+        run = path.parent.name if path.name in ("adapter", "encoder.pt") else path.stem
         parts.append(run)
     else:
         parts.append("frozen")
@@ -127,6 +131,13 @@ def main():
 
     model, processor, spec = load_encoder(args.encoder)
     image_processor = getattr(processor, "image_processor", processor)
+
+    if args.state_dict:
+        state = torch.load(args.state_dict, map_location="cpu", weights_only=True)
+        missing, unexpected = model.load_state_dict(state, strict=False)
+        if missing or unexpected:
+            print(f"  state dict: {len(missing)} missing, {len(unexpected)} unexpected keys")
+        print(f"Loaded fine-tuned weights from {args.state_dict}")
 
     if args.adapter:
         from peft import PeftModel

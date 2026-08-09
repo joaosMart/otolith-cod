@@ -96,11 +96,19 @@ def run_name_for(encoder, mode="lora", seed=42, rank=16, alpha=32, fraction=1.0)
 
 
 def lora_chain(encoder, mode="lora", seed=42, rank=16, alpha=32, fraction=1.0):
-    """Fine-tune, extract with the adapter, then classify. One logical unit."""
+    """Fine-tune, extract with the trained weights, then classify.
+
+    One logical unit: the later steps are meaningless without the earlier ones,
+    which is what makes it the right granularity for the runner to abandon on
+    failure. Full fine-tuning saves a state dict rather than an adapter
+    directory, so its extraction is invoked differently.
+    """
     name = run_name_for(encoder, mode, seed, rank, alpha, fraction)
+    weights = (f"--state-dict outputs/runs/{name}/encoder.pt" if mode == "full"
+               else f"--adapter outputs/runs/{name}/adapter")
     return [
         finetune(encoder, mode, seed, rank, alpha, fraction),
-        extract(encoder, adapter=f"outputs/runs/{name}/adapter"),
+        f"extract_embeddings.py --encoder {encoder} {weights}",
         classify(run_npz(encoder, name), name),
     ]
 
@@ -231,26 +239,38 @@ def build_batches():
 
     # Experiment C: test the overfitting claim instead of citing it.
     batches["full-finetune"] = {
-        "flavor": "a100-large", "timeout": "4h",
+        "flavor": "a100-large", "timeout": "110m",
         "groups": [lora_chain("siglip2", mode="full")],
-        "note": "Full fine-tuning baseline. Needs the 80 GB card.",
+        "needs_previous": True,
+        "note": "Full fine-tuning baseline. Needs the 80 GB card. Trains in about "
+                "22 minutes; the earlier attempt failed only at its extraction step.",
     }
 
     # Experiment E: replace the admission that rank was never tuned with a curve.
-    batches["rank-sweep"] = {
-        "flavor": "l40sx1", "timeout": "6h",
-        "groups": [lora_chain("siglip2", rank=r, alpha=2 * r) for r in (4, 8, 32, 64)],
-        "note": "Rank 4 to 64 at alpha = 2r; rank 16 comes from lora-all.",
-    }
+    # One job per rank. Nothing has completed beyond about 1h43m regardless of the
+    # timeout requested, and the combined sweep died mid-run at 1h47m, so batches
+    # are now sized to stay comfortably inside that.
+    for rank in (4, 8, 32, 64):
+        batches[f"rank-{rank}"] = {
+            "flavor": "l40sx1", "timeout": "110m",
+            "groups": [lora_chain("siglip2", rank=rank, alpha=2 * rank)],
+            "note": f"SigLIP2 LoRA at rank {rank}, alpha {2 * rank}.",
+        }
 
     # Experiment G: how many labelled otoliths does this actually need.
-    curves = [lora_chain(e, fraction=f)
-              for e in ("siglip2", "clip") for f in (0.1, 0.25, 0.5)]
-    batches["learning-curves"] = {
-        "flavor": "l40sx1", "timeout": "8h", "groups": curves,
-        "note": "SigLIP2 against CLIP at 10, 25 and 50 percent of the training set; "
-                "the 100 percent points come from lora-all.",
-    }
+    # Experiment G, also one job per point for the same reason. Smaller training
+    # fractions finish quickly, so the two cheapest are paired.
+    for encoder in ("siglip2", "clip"):
+        batches[f"curve-{encoder}-small"] = {
+            "flavor": "l40sx1", "timeout": "110m",
+            "groups": [lora_chain(encoder, fraction=f) for f in (0.1, 0.25)],
+            "note": f"{encoder} at 10 and 25 percent of the training set.",
+        }
+        batches[f"curve-{encoder}-half"] = {
+            "flavor": "l40sx1", "timeout": "110m",
+            "groups": [lora_chain(encoder, fraction=0.5)],
+            "note": f"{encoder} at 50 percent of the training set.",
+        }
 
     return batches
 
