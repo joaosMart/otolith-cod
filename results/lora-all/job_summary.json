@@ -1,0 +1,46 @@
+{
+  "commands": [
+    {
+      "command": "make_split.py",
+      "returncode": 0,
+      "minutes": 0.05
+    },
+    {
+      "command": "finetune_encoder.py --encoder clip --mode lora --seed 42 --split-file outputs/splits/main_split.json --rank 16 --lora-alpha 32",
+      "returncode": 0,
+      "minutes": 32.1
+    },
+    {
+      "command": "extract_embeddings.py --encoder clip --adapter outputs/runs/clip_lora_r16a32_s42_clahe/adapter",
+      "returncode": 0,
+      "minutes": 1.39
+    },
+    {
+      "command": "train_classifier.py --embeddings outputs/embeddings/clip_clahe_clip_lora_r16a32_s42_clahe.npz --eval-mode bootstrap --split-file outputs/splits/main_split.json --output-dir outputs/results/clip_lora_r16a32_s42_clahe/bootstrap",
+      "returncode": 0,
+      "minutes": 1.34
+    },
+    {
+      "command": "finetune_encoder.py --encoder siglip2 --mode lora --seed 42 --split-file outputs/splits/main_split.json --rank 16 --lora-alpha 32",
+      "returncode": 0,
+      "minutes": 68.27
+    },
+    {
+      "command": "extract_embeddings.py --encoder siglip2 --adapter outputs/runs/siglip2_lora_r16a32_s42_clahe/adapter",
+      "returncode": 0,
+      "minutes": 2.1
+    },
+    {
+      "command": "train_classifier.py --embeddings outputs/embeddings/siglip2_clahe_siglip2_lora_r16a32_s42_clahe.npz --eval-mode bootstrap --split-file outputs/splits/main_split.json --output-dir outputs/results/siglip2_lora_r16a32_s42_clahe/bootstrap",
+      "returncode": 0,
+      "minutes": 1.37
+    },
+    {
+      "command": "finetune_encoder.py --encoder dinov2 --mode lora --seed 42 --split-file outputs/splits/main_split.json --rank 16 --lora-alpha 32",
+      "returncode": 1,
+      "minutes": 0.22
+    }
+  ],
+  "job_id": "6a787f773e1f34a7e32c0675",
+  "accelerator": "gpu"
+}
