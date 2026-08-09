@@ -7,6 +7,9 @@
 #   "transformers==5.3.0",
 #   "peft==0.20.0",
 #   "timm",
+#   "shap>=0.46",
+#   "numba>=0.61",
+#   "llvmlite>=0.44",
 #   "coral-pytorch",
 #   "opencv-python-headless",
 #   "scikit-learn",
@@ -35,9 +38,9 @@ resolve together, since pinning one without the other makes them unsatisfiable.
 
 Two further dependency notes. `opencv-python-headless` rather than `opencv-python`,
 because the uv base image has no libGL and the normal wheel fails to import.
-And no `shap`: it drags in numba and llvmlite, whose resolution picks a version
-that cannot build on Python 3.12, and the GPU stage does not need it. Feature
-attribution runs afterwards on cached embeddings, on CPU.
+And `shap` is pinned together with modern `numba` and `llvmlite`: left to
+resolve freely, uv picks llvmlite 0.36, which only builds on Python below 3.10
+and fails the whole job at the dependency stage.
 
 Invoked by scripts/hf/submit.py, not usually by hand:
 
@@ -82,6 +85,11 @@ def parse_args():
                         "survive even if the upload step fails.")
     p.add_argument("--run-group", default=None,
                    help="Subdirectory grouping this batch of results.")
+    p.add_argument("--seed-outputs", action="store_true",
+                   help="Pull artifacts from previous batches into outputs/ "
+                        "before running. Needed whenever a batch consumes "
+                        "something an earlier batch produced, such as a LoRA "
+                        "adapter, since each job starts with an empty container.")
     return p.parse_args()
 
 
@@ -197,6 +205,41 @@ def preflight(commands, workdir: Path):
     log("preflight: all scripts import cleanly")
 
 
+def seed_outputs(workdir: Path, results_repo: str):
+    """Merge artifacts from earlier batches into this job's outputs directory.
+
+    The results repo stores each batch under its own group prefix. Flattening
+    them into one outputs/ tree is what lets an adapter trained in one job be
+    consumed by another. Embedding caches are excluded there, so only small
+    artifacts travel: adapters, splits and result JSONs.
+    """
+    from huggingface_hub import snapshot_download
+
+    log(f"seeding outputs/ from {results_repo}")
+    try:
+        local = Path(snapshot_download(repo_id=results_repo, repo_type="dataset"))
+    except Exception as exc:
+        log(f"could not read previous results ({exc}); continuing without them")
+        return
+
+    destination = workdir / "outputs"
+    copied = 0
+    for group in sorted(local.iterdir()):
+        source = group / "outputs"
+        if not source.is_dir():
+            continue
+        for item in source.rglob("*"):
+            if not item.is_file():
+                continue
+            target = destination / item.relative_to(source)
+            if target.exists():
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(item, target)
+            copied += 1
+    log(f"seeded {copied} files from previous batches")
+
+
 def run_command(command: str, workdir: Path) -> dict:
     """Run one experiment command, streaming its output into the job log."""
     parts = command.split()
@@ -268,6 +311,9 @@ def main():
 
     workdir = fetch_bundle(args.repo)
     sys.path.insert(0, str(workdir))
+
+    if args.seed_outputs and args.output_repo:
+        seed_outputs(workdir, args.output_repo)
 
     chains = resolve_commands(args, workdir)
     commands = [c for chain in chains for c in chain]

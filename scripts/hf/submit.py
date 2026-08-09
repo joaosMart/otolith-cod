@@ -57,6 +57,13 @@ def classify(npz, name):
             f"--split-file {SPLIT} --output-dir outputs/results/{name}/bootstrap")
 
 
+def attribution(npz, name):
+    return (f"analyze_feature_importance.py --embeddings {npz} "
+            f"--results outputs/results/{name}/bootstrap/results.json "
+            f"--output-dir outputs/results/{name}/bootstrap/feature_importance "
+            f"--split-file {SPLIT}")
+
+
 def frozen_npz(encoder, resize="pad"):
     slug = "clahe" if resize == "pad" else f"clahe_{resize}"
     return f"outputs/embeddings/{encoder}_{slug}_frozen.npz"
@@ -166,6 +173,40 @@ def build_batches():
             "note": f"LoRA on {encoder} alone, seed 42.",
         }
 
+    # Attribution has to re-derive its own embeddings: jobs are ephemeral and
+    # the results repo deliberately excludes the .npz caches, which are large
+    # and regenerable. Extraction is only a minute or two, so a self-contained
+    # chain is cheaper than shipping embeddings around.
+    lora_run = run_name_for("siglip2")
+    batches["attribution"] = {
+        "flavor": "l40sx1", "timeout": "90m",
+        "groups": [[
+            extract("siglip2"),
+            classify(frozen_npz("siglip2"), "siglip2-frozen"),
+            attribution(frozen_npz("siglip2"), "siglip2-frozen"),
+        ], [
+            extract("siglip2", adapter=f"outputs/runs/{lora_run}/adapter"),
+            classify(run_npz("siglip2", lora_run), lora_run),
+            attribution(run_npz("siglip2", lora_run), lora_run),
+        ]],
+        "needs_previous": True,
+        "note": "SHAP, permutation importance and forward selection for frozen "
+                "vs LoRA SigLIP2. Produces the paper's attribution figures.",
+    }
+
+    # Collects everything the manuscript quotes into one JSON plus figures.
+    # Re-extracts because jobs are ephemeral; extraction is a couple of minutes.
+    batches["summarize"] = {
+        "flavor": "l40sx1", "timeout": "60m",
+        "groups": [[
+            extract("siglip2"),
+            extract("siglip2", adapter=f"outputs/runs/{run_name_for('siglip2')}/adapter"),
+            "summarize_results.py",
+        ]],
+        "needs_previous": True,
+        "note": "Per-age table, McNemar test, seed spread and all paper figures.",
+    }
+
     # Experiment B: run-to-run and split-to-split variation, currently unknown.
     # One job per seed. Chain-level resilience protects against a run failing,
     # but not against the whole job being preempted, which is what took out the
@@ -261,6 +302,8 @@ def main():
     argv += ["--repo", args.bundle_repo,
              "--output-repo", args.output_repo,
              "--run-group", args.batch]
+    if batch.get("needs_previous"):
+        argv.append("--seed-outputs")
     # Only the batch name crosses argv. The runner reads the definition from
     # this same file inside the bundle, so there is one source of truth and no
     # argument long enough to trip the client's local-file detection.
