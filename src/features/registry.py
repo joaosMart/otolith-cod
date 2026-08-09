@@ -55,8 +55,10 @@ class EncoderSpec:
     #: unfreezing these is an opt-in ablation, not the default behaviour.
     poolable_modules: Tuple[str, ...] = ()
 
-    #: "auto" -> AutoProcessor, "image" -> AutoImageProcessor.
-    processor_kind: str = "auto"
+    #: "image" -> AutoImageProcessor, "auto" -> AutoProcessor. Prefer "image":
+    #: the full processor also loads a text tokenizer, which no vision-only
+    #: path uses and which costs a 34 MB download per job.
+    processor_kind: str = "image"
 
     #: Set when the pooled vector passes through a projection that lives outside
     #: the vision tower, so LoRA does not adapt it but extraction must apply it.
@@ -78,7 +80,7 @@ ENCODERS = {
         lora_targets=("q_proj", "k_proj", "v_proj", "fc1", "fc2"),
         readout="vision_pooler",
         poolable_modules=("post_layernorm",),
-        processor_kind="auto",
+        processor_kind="image",
         projection_attr="visual_projection",
         loader_class="CLIPVisionModelWithProjection",
         image_size=336,
@@ -94,7 +96,7 @@ ENCODERS = {
         # image-level vector; SigLIP2 has no class token. Unfreezing it adds
         # 15.24M full-rank parameters against 7.70M of LoRA at rank 16.
         poolable_modules=("head", "post_layernorm"),
-        processor_kind="auto",
+        processor_kind="image",
         projection_attr=None,
         loader_class="SiglipVisionModel",
         image_size=384,
@@ -184,11 +186,12 @@ def adaptable_module(model: torch.nn.Module, spec: EncoderSpec) -> torch.nn.Modu
     """The submodule LoRA should be injected into.
 
     For vision-language models this is the vision tower alone, so the text tower
-    is left untouched and is not carried around in the saved adapter.
+    is left untouched and is not carried around in the saved adapter. Some
+    transformers releases wrap the tower in a `.vision_model` attribute and
+    others expose it directly, so this resolves either shape rather than
+    assuming one.
     """
-    if spec.readout in ("vision_pooler",):
-        return model.vision_model
-    return model
+    return getattr(model, "vision_model", model)
 
 
 def embed_images(
@@ -203,17 +206,34 @@ def embed_images(
     forward pass during fine-tuning. Using one readout for both is what makes the
     frozen and adapted conditions comparable: any difference between them is the
     encoder weights, never the pooling.
+
+    The output field is resolved by inspecting what the model returned rather
+    than by hardcoding a path per architecture. Model classes have been
+    restructured between transformers releases, and a readout that assumes one
+    layout fails at run time on the other, which is exactly the kind of breakage
+    that is expensive to discover on rented hardware.
     """
-    if spec.readout == "vision_pooler":
-        outputs = model.vision_model(pixel_values=pixel_values)
+    outputs = model(pixel_values=pixel_values)
+
+    if spec.readout == "cls_token":
+        features = outputs.last_hidden_state[:, 0, :]
+    elif getattr(outputs, "image_embeds", None) is not None:
+        # CLIPVisionModelWithProjection: already through the visual projection.
+        features = outputs.image_embeds
+    elif getattr(outputs, "pooler_output", None) is not None:
+        # SigLIP2: the attention-pooling head's output. No class token exists.
         features = outputs.pooler_output
         if spec.projection_attr is not None:
             features = getattr(model, spec.projection_attr)(features)
-    elif spec.readout == "cls_token":
-        outputs = model(pixel_values=pixel_values)
-        features = outputs.last_hidden_state[:, 0, :]
     else:
-        raise ValueError(f"Unhandled readout '{spec.readout}' for encoder {spec.name}")
+        features = outputs.last_hidden_state[:, 0, :]
+
+    if features.shape[-1] != spec.embedding_dim:
+        raise RuntimeError(
+            f"{spec.name} produced a {features.shape[-1]}-d embedding but the "
+            f"registry declares {spec.embedding_dim}. The readout and the "
+            "checkpoint disagree; do not trust downstream results."
+        )
 
     if normalize:
         features = F.normalize(features, p=2, dim=-1, eps=1e-8)
@@ -230,10 +250,7 @@ def patch_tokens(
     Used by the attention and saliency visualisations, where including the
     register tokens in a spatial map would misalign the grid.
     """
-    if spec.readout == "vision_pooler":
-        hidden = model.vision_model(pixel_values=pixel_values).last_hidden_state
-    else:
-        hidden = model(pixel_values=pixel_values).last_hidden_state
+    hidden = model(pixel_values=pixel_values).last_hidden_state
 
     prefix = PREFIX_TOKENS.get(spec.name, 0)
     return hidden[:, prefix:, :]

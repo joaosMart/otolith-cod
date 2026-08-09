@@ -16,6 +16,7 @@ anything, which is also the fastest way to sanity-check a batch definition.
 """
 
 import argparse
+import json
 import shlex
 import subprocess
 import sys
@@ -26,8 +27,12 @@ project_root = Path(__file__).resolve().parents[2]
 BUNDLE_REPO = "hafsteinn/otolith-cod-bundle"
 OUTPUT_REPO = "hafsteinn/otolith-cod-results"
 
-#: All four encoders, in the order the paper's table presents them.
-ENCODERS = ["clip", "siglip2", "dinov2", "dinov3"]
+#: Encoders whose weights are freely downloadable. DINOv3 is deliberately not
+#: here: its repo is gated behind manual approval, so a batch containing it fails
+#: partway through and wastes the GPU time already spent on the others. Once
+#: access is granted, run the separate "dinov3" batch.
+ENCODERS = ["clip", "siglip2", "dinov2"]
+GATED_ENCODERS = ["dinov3"]
 
 #: The five seeds for the repeated-run comparison. 42 is the original, so its
 #: result is directly comparable with everything else already produced.
@@ -127,9 +132,20 @@ def build_batches():
 
     # Experiment A: does every encoder benefit from adaptation, or only SigLIP2?
     batches["lora-all"] = {
-        "flavor": "l40sx1", "timeout": "6h",
+        "flavor": "l40sx1", "timeout": "5h",
         "commands": [c for e in ENCODERS for c in lora_chain(e)],
-        "note": "LoRA on all four encoders, seed 42.",
+        "note": "LoRA on the three ungated encoders, seed 42. About 1h per encoder.",
+    }
+
+    # Separate because the weights need a licence acceptance that cannot be
+    # automated. Kept identical in every other respect so its results drop
+    # straight into the same table.
+    batches["dinov3"] = {
+        "flavor": "l40sx1", "timeout": "3h",
+        "commands": ([extract(e) for e in GATED_ENCODERS]
+                     + [classify(frozen_npz(e), f"{e}-frozen") for e in GATED_ENCODERS]
+                     + [c for e in GATED_ENCODERS for c in lora_chain(e)]),
+        "note": "Frozen and LoRA DINOv3. Requires accepting the licence first.",
     }
 
     # Experiment B: run-to-run and split-to-split variation, currently unknown.
@@ -207,10 +223,6 @@ def main():
         return 0
 
     batch = batches[args.batch]
-    # Every batch begins by materialising the shared split. It is deterministic
-    # and a no-op when the file already exists, so prepending it costs nothing
-    # and removes the ordering dependency between batches.
-    batch = {**batch, "commands": ["make_split.py"] + batch["commands"]}
     flavor = args.flavor or batch["flavor"]
     timeout = args.timeout or batch["timeout"]
 
@@ -229,8 +241,10 @@ def main():
     argv += ["--repo", args.bundle_repo,
              "--output-repo", args.output_repo,
              "--run-group", args.batch]
-    for command in batch["commands"]:
-        argv += ["--command", command]
+    # Only the batch name crosses argv. The runner reads the definition from
+    # this same file inside the bundle, so there is one source of truth and no
+    # argument long enough to trip the client's local-file detection.
+    argv += ["--batch", args.batch]
 
     print(f"Batch '{args.batch}': {len(batch['commands'])} commands on {flavor}, "
           f"timeout {timeout}")

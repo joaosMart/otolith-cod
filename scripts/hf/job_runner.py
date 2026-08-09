@@ -4,17 +4,18 @@
 # dependencies = [
 #   "torch",
 #   "torchvision",
-#   "transformers>=4.56",
-#   "peft>=0.13",
+#   "transformers==5.3.0",
+#   "peft==0.20.0",
 #   "coral-pytorch",
 #   "opencv-python-headless",
 #   "scikit-learn",
 #   "pandas",
 #   "numpy",
+#   "scipy",
+#   "seaborn",
 #   "matplotlib",
 #   "tqdm",
 #   "pyyaml",
-#   "shap",
 #   "huggingface_hub>=1.9",
 # ]
 # ///
@@ -25,8 +26,17 @@ Fetches the code and data bundle from a private dataset repo, reconstructs the
 directory layout the pipeline expects, runs one or more experiment commands, and
 copies the results out to a persistent location before the container disappears.
 
-`opencv-python-headless` rather than `opencv-python`: the uv base image has no
-libGL, and the normal wheel fails to import there.
+transformers and peft are pinned to the versions the code was validated
+against. An unpinned `transformers>=4.56` resolved to a release whose SigLIP
+vision model has a different attribute layout, and the job failed only after
+downloading the weights. torch and torchvision are deliberately left to
+resolve together, since pinning one without the other makes them unsatisfiable.
+
+Two further dependency notes. `opencv-python-headless` rather than `opencv-python`,
+because the uv base image has no libGL and the normal wheel fails to import.
+And no `shap`: it drags in numba and llvmlite, whose resolution picks a version
+that cannot build on Python 3.12, and the GPU stage does not need it. Feature
+attribution runs afterwards on cached embeddings, on CPU.
 
 Invoked by scripts/hf/submit.py, not usually by hand:
 
@@ -50,9 +60,19 @@ DEFAULT_REPO = "hafsteinn/otolith-cod-bundle"
 def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--repo", default=os.environ.get("BUNDLE_REPO", DEFAULT_REPO))
-    p.add_argument("--command", action="append", required=True,
-                   help="A script under scripts/ plus its arguments. Repeatable; "
-                        "commands run in order and the job stops at the first failure.")
+    # A JSON list rather than a repeatable flag: the `hf jobs uv run` client
+    # scans post-`--` arguments for things that look like local file paths and
+    # tries to upload them, so a bare "make_split.py" argument makes submission
+    # fail before the job is ever created.
+    p.add_argument("--batch", default=None,
+                   help="Name of a batch defined in scripts/hf/submit.py inside "
+                        "the bundle. Preferred over --commands-json: the batch "
+                        "definitions stay in one place and nothing long travels "
+                        "through argv.")
+    p.add_argument("--commands-json", default=None,
+                   help="JSON list of commands, for ad-hoc runs. Keep it short: "
+                        "the Jobs client stats every argument to see whether it "
+                        "is a local file, and a long string raises ENAMETOOLONG.")
     p.add_argument("--output-repo", default=os.environ.get("OUTPUT_REPO"),
                    help="Dataset repo that results are pushed to. Falls back to "
                         "--output-dir alone if unset.")
@@ -118,6 +138,63 @@ def fetch_bundle(repo: str) -> Path:
     return WORKDIR
 
 
+def resolve_commands(args, workdir: Path) -> list:
+    """Read the command list, preferring the batch definition in the bundle."""
+    if args.commands_json:
+        return json.loads(args.commands_json)
+    if not args.batch:
+        raise SystemExit("Pass either --batch or --commands-json.")
+
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "submit", workdir / "scripts" / "hf" / "submit.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    batches = module.build_batches()
+    if args.batch not in batches:
+        raise SystemExit(f"Unknown batch '{args.batch}'. "
+                         f"Available: {', '.join(sorted(batches))}")
+    # The shared split is a prerequisite for every batch and is a no-op once it
+    # exists, so it is prepended here rather than duplicated in each definition.
+    return ["make_split.py"] + batches[args.batch]["commands"]
+
+
+def preflight(commands, workdir: Path):
+    """Import-check every script before running any of them.
+
+    Running a script with --help executes all its module-level imports and then
+    exits, which catches a missing dependency in about a second. Without this a
+    missing package in the last step of a batch is only discovered after the
+    hours of GPU time that preceded it, which is how a seaborn import cost a
+    full round of fine-tuning.
+    """
+    scripts = sorted({c.split()[0] for c in commands})
+    log(f"preflight: import-checking {len(scripts)} scripts")
+
+    broken = []
+    for name in scripts:
+        script = workdir / "scripts" / name
+        if not script.exists():
+            broken.append((name, "not present in the bundle"))
+            continue
+        result = subprocess.run([sys.executable, str(script), "--help"],
+                                cwd=str(workdir), capture_output=True, text=True)
+        if result.returncode != 0:
+            tail = (result.stderr or result.stdout).strip().splitlines()
+            broken.append((name, tail[-1] if tail else f"exit {result.returncode}"))
+
+    for name, reason in broken:
+        log(f"  BROKEN {name}: {reason}")
+    if broken:
+        raise SystemExit(
+            f"{len(broken)} script(s) cannot even be imported. Fix the bundle "
+            "before spending GPU time."
+        )
+    log("preflight: all scripts import cleanly")
+
+
 def run_command(command: str, workdir: Path) -> dict:
     """Run one experiment command, streaming its output into the job log."""
     parts = command.split()
@@ -147,26 +224,40 @@ def publish(workdir: Path, args, summary):
 
     group = args.run_group or os.environ.get("JOB_ID", "run")
 
-    destination = Path(args.output_dir)
-    if destination.parent.exists() or destination.exists():
-        target = destination / group
-        target.mkdir(parents=True, exist_ok=True)
-        shutil.copytree(outputs, target / "outputs", dirs_exist_ok=True)
-        with open(target / "summary.json", "w") as fh:
-            json.dump(summary, fh, indent=2)
-        log(f"results written to {target}")
-    else:
-        log(f"{destination} is not mounted; skipping bucket copy")
+    with open(outputs / "job_summary.json", "w") as fh:
+        json.dump(summary, fh, indent=2)
 
+    # The results dataset repo is the real persistence mechanism. A mounted
+    # bucket, if one is present, is a convenience on top of it.
     if args.output_repo:
         from huggingface_hub import HfApi
         api = HfApi()
         api.create_repo(args.output_repo, repo_type="dataset", private=True,
                         exist_ok=True)
         log(f"uploading results to {args.output_repo} under {group}/")
-        api.upload_folder(folder_path=str(outputs), path_in_repo=f"{group}/outputs",
-                          repo_id=args.output_repo, repo_type="dataset",
-                          commit_message=f"Results for {group}")
+        try:
+            api.upload_folder(
+                folder_path=str(outputs), path_in_repo=f"{group}/outputs",
+                repo_id=args.output_repo, repo_type="dataset",
+                commit_message=f"Results for {group}",
+                # Model weights and embedding caches are large and regenerable;
+                # keeping them out makes the results repo something you can
+                # actually clone. Adapters are small and worth keeping.
+                ignore_patterns=["*.npz", "encoder.pt"],
+            )
+            log("upload complete")
+        except Exception as exc:
+            log(f"UPLOAD FAILED: {exc}")
+            log("results still exist inside the container; retrieve them with hf jobs ssh")
+    else:
+        log("no --output-repo given; results will be lost when the job ends")
+
+    mounted = Path(args.output_dir)
+    if mounted.is_dir():
+        target = mounted / group
+        target.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(outputs, target / "outputs", dirs_exist_ok=True)
+        log(f"also copied to the mounted volume at {target}")
 
 
 def main():
@@ -176,11 +267,15 @@ def main():
     workdir = fetch_bundle(args.repo)
     sys.path.insert(0, str(workdir))
 
+    commands = resolve_commands(args, workdir)
+    log(f"{len(commands)} commands to run")
+    preflight(commands, workdir)
+
     summary = {"commands": [], "job_id": os.environ.get("JOB_ID"),
                "accelerator": os.environ.get("ACCELERATOR")}
     failed = False
 
-    for command in args.command:
+    for command in commands:
         record = run_command(command, workdir)
         summary["commands"].append(record)
         if record["returncode"] != 0:
