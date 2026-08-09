@@ -261,16 +261,24 @@ def ordinal_metrics(preds, labels):
 
 
 def run_epoch(model, loader, num_classes, device, optimizer=None,
-              scheduler=None, autocast_dtype=None):
-    """One pass over a loader. Trains when an optimizer is supplied."""
+              scheduler=None, autocast_dtype=None, accum_steps=1):
+    """One pass over a loader. Trains when an optimizer is supplied.
+
+    Gradients accumulate over `accum_steps` micro-batches before each optimizer
+    step, so encoders that cannot fit the target batch in memory still train
+    against the same effective batch as the others.
+    """
     training = optimizer is not None
     model.train(training)
 
     total_loss, preds_all, labels_all = 0.0, [], []
     context = torch.enable_grad() if training else torch.no_grad()
 
+    if training:
+        optimizer.zero_grad(set_to_none=True)
+
     with context:
-        for images, labels in loader:
+        for step, (images, labels) in enumerate(loader):
             images = images.to(device, non_blocking=True)
             labels = (labels - 1).long().to(device, non_blocking=True)
 
@@ -283,13 +291,14 @@ def run_epoch(model, loader, num_classes, device, optimizer=None,
                 loss = corn_loss(logits, labels, num_classes=num_classes)
 
             if training:
-                optimizer.zero_grad(set_to_none=True)
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(
-                    [p for p in model.parameters() if p.requires_grad], max_norm=1.0
-                )
-                optimizer.step()
-                scheduler.step()
+                (loss / accum_steps).backward()
+                if (step + 1) % accum_steps == 0 or (step + 1) == len(loader):
+                    torch.nn.utils.clip_grad_norm_(
+                        [p for p in model.parameters() if p.requires_grad], max_norm=1.0
+                    )
+                    optimizer.step()
+                    scheduler.step()
+                    optimizer.zero_grad(set_to_none=True)
 
             total_loss += loss.item() * images.size(0)
             preds_all.append(corn_label_from_logits(logits.float()).long().detach())
@@ -418,11 +427,17 @@ def main():
     val_ds = OtolithDataset(root, transform=eval_transform, age_range=age_range,
                             indices=ft_val.tolist(), metadata_csv=metadata_csv)
 
+    micro = min(args.batch_size, spec.micro_batch)
+    accum_steps = max(1, args.batch_size // micro)
+    if accum_steps > 1:
+        print(f"Micro-batch {micro} with {accum_steps} accumulation steps "
+              f"for an effective batch of {micro * accum_steps}")
+
     loader_kwargs = dict(num_workers=args.num_workers,
                          pin_memory=(device.type == "cuda"))
-    train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True,
+    train_loader = DataLoader(train_ds, batch_size=micro, shuffle=True,
                               drop_last=False, **loader_kwargs)
-    val_loader = DataLoader(val_ds, batch_size=args.batch_size, shuffle=False,
+    val_loader = DataLoader(val_ds, batch_size=micro, shuffle=False,
                             **loader_kwargs)
 
     print(f"Fine-tune train: {len(train_ds)}   validation: {len(val_ds)}   "
@@ -434,7 +449,7 @@ def main():
         groups.insert(0, {"params": encoder_params, "lr": lr})
     optimizer = torch.optim.AdamW(groups, lr=lr, weight_decay=args.weight_decay)
 
-    steps_per_epoch = max(1, len(train_loader))
+    steps_per_epoch = max(1, -(-len(train_loader) // accum_steps))
     scheduler = cosine_schedule_with_warmup(
         optimizer, args.warmup_epochs * steps_per_epoch, args.epochs * steps_per_epoch
     )
@@ -455,7 +470,8 @@ def main():
 
     for epoch in range(args.epochs):
         train_metrics = run_epoch(head, train_loader, num_classes, device,
-                                  optimizer, scheduler, autocast_dtype)
+                                  optimizer, scheduler, autocast_dtype,
+                                  accum_steps=accum_steps)
         val_metrics = run_epoch(head, val_loader, num_classes, device,
                                 autocast_dtype=autocast_dtype)
 
@@ -509,6 +525,8 @@ def main():
         "elapsed_minutes": round(elapsed, 2),
         "sizes": {"ft_train": len(train_ds), "ft_val": len(val_ds),
                   "test": len(test_idx)},
+        "batching": {"effective": args.batch_size, "micro": micro,
+                     "accum_steps": accum_steps},
         "history": history,
     }
     with open(output_dir / "training_info.json", "w") as fh:

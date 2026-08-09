@@ -6,6 +6,7 @@
 #   "torchvision",
 #   "transformers==5.3.0",
 #   "peft==0.20.0",
+#   "timm",
 #   "coral-pytorch",
 #   "opencv-python-headless",
 #   "scikit-learn",
@@ -141,7 +142,7 @@ def fetch_bundle(repo: str) -> Path:
 def resolve_commands(args, workdir: Path) -> list:
     """Read the command list, preferring the batch definition in the bundle."""
     if args.commands_json:
-        return json.loads(args.commands_json)
+        return [[c] for c in json.loads(args.commands_json)]
     if not args.batch:
         raise SystemExit("Pass either --batch or --commands-json.")
 
@@ -157,8 +158,9 @@ def resolve_commands(args, workdir: Path) -> list:
         raise SystemExit(f"Unknown batch '{args.batch}'. "
                          f"Available: {', '.join(sorted(batches))}")
     # The shared split is a prerequisite for every batch and is a no-op once it
-    # exists, so it is prepended here rather than duplicated in each definition.
-    return ["make_split.py"] + batches[args.batch]["commands"]
+    # exists, so it becomes a chain of its own rather than being duplicated in
+    # each definition.
+    return [["make_split.py"]] + batches[args.batch]["groups"]
 
 
 def preflight(commands, workdir: Path):
@@ -267,21 +269,27 @@ def main():
     workdir = fetch_bundle(args.repo)
     sys.path.insert(0, str(workdir))
 
-    commands = resolve_commands(args, workdir)
-    log(f"{len(commands)} commands to run")
+    chains = resolve_commands(args, workdir)
+    commands = [c for chain in chains for c in chain]
+    log(f"{len(chains)} chains, {len(commands)} commands")
     preflight(commands, workdir)
 
     summary = {"commands": [], "job_id": os.environ.get("JOB_ID"),
                "accelerator": os.environ.get("ACCELERATOR")}
     failed = False
 
-    for command in commands:
-        record = run_command(command, workdir)
-        summary["commands"].append(record)
-        if record["returncode"] != 0:
-            failed = True
-            log("stopping: a command failed")
-            break
+    for index, chain in enumerate(chains, 1):
+        for position, command in enumerate(chain):
+            record = run_command(command, workdir)
+            record["chain"] = index
+            summary["commands"].append(record)
+            if record["returncode"] != 0:
+                failed = True
+                skipped = len(chain) - position - 1
+                log(f"chain {index} failed; skipping its remaining {skipped} "
+                    f"command(s) and continuing with the next chain")
+                summary.setdefault("skipped", []).extend(chain[position + 1:])
+                break
 
     # Publish whatever exists, including partial results from a failed batch.
     # Losing four completed runs because a fifth crashed would be the expensive

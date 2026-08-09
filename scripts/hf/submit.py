@@ -98,7 +98,19 @@ def lora_chain(encoder, mode="lora", seed=42, rank=16, alpha=32, fraction=1.0):
     ]
 
 
+def _flatten(groups):
+    return [c for g in groups for c in g]
+
+
 def build_batches():
+    """Each batch is a list of independent chains.
+
+    A chain is a sequence whose later steps depend on its earlier ones, such as
+    fine-tune then extract then classify. Chains are independent of each other,
+    so the runner can abandon a failing chain and carry on with the next instead
+    of discarding the hours already spent. Losing four completed encoders
+    because a fifth ran out of memory is the expensive failure mode here.
+    """
     batches = {}
 
     # A deliberately tiny job whose only purpose is to measure throughput on the
@@ -108,9 +120,9 @@ def build_batches():
     batches["calibrate"] = {
         "flavor": "l40sx1",
         "timeout": "50m",
-        "commands": [
-            extract("siglip2"),
-            finetune("siglip2", extra="--epochs 2 --patience 99 --run-name calib"),
+        "groups": [
+            [extract("siglip2")],
+            [finetune("siglip2", extra="--epochs 2 --patience 99 --run-name calib")],
         ],
         "note": "Throughput measurement. Sizes every later batch.",
     }
@@ -118,22 +130,19 @@ def build_batches():
     # Frozen baselines for all four encoders, plus the resize-mode comparison
     # that the wide-crop geometry makes necessary. Extraction is inference only,
     # so this is cheap and mostly bounded by image loading.
-    frozen = []
-    for encoder in ENCODERS:
-        frozen.append(extract(encoder))
-        frozen.append(classify(frozen_npz(encoder), f"{encoder}-frozen"))
-    for resize in ("squash", "crop"):
-        frozen.append(extract("siglip2", resize=resize))
-        frozen.append(classify(frozen_npz("siglip2", resize), f"siglip2-frozen-{resize}"))
+    frozen = [[extract(e), classify(frozen_npz(e), f"{e}-frozen")] for e in ENCODERS]
+    frozen += [[extract("siglip2", resize=r),
+                classify(frozen_npz("siglip2", r), f"siglip2-frozen-{r}")]
+               for r in ("squash", "crop")]
     batches["frozen"] = {
-        "flavor": "l40sx1", "timeout": "2h", "commands": frozen,
+        "flavor": "l40sx1", "timeout": "2h", "groups": frozen,
         "note": "Four frozen encoders plus the pad/squash/crop preprocessing comparison.",
     }
 
     # Experiment A: does every encoder benefit from adaptation, or only SigLIP2?
     batches["lora-all"] = {
         "flavor": "l40sx1", "timeout": "5h",
-        "commands": [c for e in ENCODERS for c in lora_chain(e)],
+        "groups": [lora_chain(e) for e in ENCODERS],
         "note": "LoRA on the three ungated encoders, seed 42. About 1h per encoder.",
     }
 
@@ -142,51 +151,62 @@ def build_batches():
     # straight into the same table.
     batches["dinov3"] = {
         "flavor": "l40sx1", "timeout": "3h",
-        "commands": ([extract(e) for e in GATED_ENCODERS]
-                     + [classify(frozen_npz(e), f"{e}-frozen") for e in GATED_ENCODERS]
-                     + [c for e in GATED_ENCODERS for c in lora_chain(e)]),
+        "groups": ([[extract(e), classify(frozen_npz(e), f"{e}-frozen")]
+                    for e in GATED_ENCODERS]
+                   + [lora_chain(e) for e in GATED_ENCODERS]),
         "note": "Frozen and LoRA DINOv3. Requires accepting the licence first.",
     }
 
+    # Per-encoder LoRA jobs, so a single encoder can be re-run without repeating
+    # the ones that already succeeded.
+    for encoder in ENCODERS + GATED_ENCODERS:
+        batches[f"lora-{encoder}"] = {
+            "flavor": "l40sx1", "timeout": "150m",
+            "groups": [lora_chain(encoder)],
+            "note": f"LoRA on {encoder} alone, seed 42.",
+        }
+
     # Experiment B: run-to-run and split-to-split variation, currently unknown.
-    batches["seeds"] = {
-        "flavor": "l40sx1", "timeout": "6h",
-        "commands": [c for s in SEEDS if s != 42 for c in lora_chain("siglip2", seed=s)],
-        "note": "Four further seeds for SigLIP2; seed 42 comes from lora-all.",
-    }
+    # One job per seed. Chain-level resilience protects against a run failing,
+    # but not against the whole job being preempted, which is what took out the
+    # combined four-seed job partway through its second run.
+    for seed in SEEDS:
+        if seed == 42:
+            continue
+        batches[f"seed-{seed}"] = {
+            "flavor": "l40sx1", "timeout": "150m",
+            "groups": [lora_chain("siglip2", seed=seed)],
+            "note": f"SigLIP2 LoRA at seed {seed}.",
+        }
 
     # Experiment F: how much of the gain is LoRA, and how much is the pooling
     # head that the original code silently trained at full rank.
     batches["pooling-head"] = {
         "flavor": "l40sx1", "timeout": "3h",
-        "commands": lora_chain("siglip2", mode="lora+pool") + [
-            finetune("siglip2", mode="probe"),
-        ],
+        "groups": [lora_chain("siglip2", mode="lora+pool"),
+                   [finetune("siglip2", mode="probe")]],
         "note": "LoRA plus unfrozen pooling head, against pure LoRA and a linear probe.",
     }
 
     # Experiment C: test the overfitting claim instead of citing it.
     batches["full-finetune"] = {
         "flavor": "a100-large", "timeout": "4h",
-        "commands": lora_chain("siglip2", mode="full") + [],
+        "groups": [lora_chain("siglip2", mode="full")],
         "note": "Full fine-tuning baseline. Needs the 80 GB card.",
     }
 
     # Experiment E: replace the admission that rank was never tuned with a curve.
     batches["rank-sweep"] = {
         "flavor": "l40sx1", "timeout": "6h",
-        "commands": [c for r in (4, 8, 32, 64)
-                     for c in lora_chain("siglip2", rank=r, alpha=2 * r)],
+        "groups": [lora_chain("siglip2", rank=r, alpha=2 * r) for r in (4, 8, 32, 64)],
         "note": "Rank 4 to 64 at alpha = 2r; rank 16 comes from lora-all.",
     }
 
     # Experiment G: how many labelled otoliths does this actually need.
-    curves = []
-    for encoder in ("siglip2", "clip"):
-        for fraction in (0.1, 0.25, 0.5):
-            curves.extend(lora_chain(encoder, fraction=fraction))
+    curves = [lora_chain(e, fraction=f)
+              for e in ("siglip2", "clip") for f in (0.1, 0.25, 0.5)]
     batches["learning-curves"] = {
-        "flavor": "l40sx1", "timeout": "8h", "commands": curves,
+        "flavor": "l40sx1", "timeout": "8h", "groups": curves,
         "note": "SigLIP2 against CLIP at 10, 25 and 50 percent of the training set; "
                 "the 100 percent points come from lora-all.",
     }
@@ -218,7 +238,7 @@ def main():
         print("-" * 100)
         for name, batch in batches.items():
             print(f"{name:<18} {batch['flavor']:<14} {batch['timeout']:<9} "
-                  f"{len(batch['commands']):>5}  {batch['note']}")
+                  f"{len(_flatten(batch['groups'])):>5}  {batch['note']}")
         print("\nSubmit one with:  python scripts/hf/submit.py --batch <name> --dry-run")
         return 0
 
@@ -246,11 +266,13 @@ def main():
     # argument long enough to trip the client's local-file detection.
     argv += ["--batch", args.batch]
 
-    print(f"Batch '{args.batch}': {len(batch['commands'])} commands on {flavor}, "
-          f"timeout {timeout}")
+    print(f"Batch '{args.batch}': {len(batch['groups'])} chains, "
+          f"{len(_flatten(batch['groups']))} commands on {flavor}, timeout {timeout}")
     print(f"Note: {batch['note']}\n")
-    for i, command in enumerate(batch["commands"], 1):
-        print(f"  {i:>2}. {command}")
+    for gi, group in enumerate(batch["groups"], 1):
+        print(f"  chain {gi}:")
+        for command in group:
+            print(f"      {command}")
 
     hourly = {"l40sx1": 1.80, "a100-large": 2.50, "l4x1": 0.80,
               "a10g-small": 1.00, "rtx-pro-6000": 2.75}.get(flavor)
@@ -268,8 +290,17 @@ def main():
 
 
 def _hours(timeout: str) -> float:
-    unit, value = timeout[-1], float(timeout[:-1])
-    return {"s": value / 3600, "m": value / 60, "h": value, "d": value * 24}[unit]
+    """Hours in a duration string.
+
+    Kept tolerant of compound forms even though batch definitions must use a
+    single unit: the Jobs CLI rejects anything like "2h30m" server-side.
+    """
+    import re
+    factors = {"s": 1 / 3600, "m": 1 / 60, "h": 1.0, "d": 24.0}
+    parts = re.findall(r"([0-9]*\.?[0-9]+)\s*([smhd])", timeout.lower())
+    if not parts:
+        raise ValueError(f"Could not parse timeout {timeout!r}")
+    return sum(float(value) * factors[unit] for value, unit in parts)
 
 
 if __name__ == "__main__":

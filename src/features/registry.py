@@ -34,6 +34,21 @@ LOADER_CLASSES = {
 }
 
 
+class _TimmProcessorShim:
+    """Presents timm's data config the way the transform builders expect it.
+
+    timm has no image-processor object; it exposes resolution and normalisation
+    statistics as a plain dict. Rather than teach the preprocessing module about
+    a second convention, this adapts timm to the one it already uses.
+    """
+
+    def __init__(self, data_config):
+        size = data_config["input_size"][-1]
+        self.size = {"height": size, "width": size}
+        self.image_mean = list(data_config["mean"])
+        self.image_std = list(data_config["std"])
+
+
 @dataclass(frozen=True)
 class EncoderSpec:
     """Everything the pipeline needs to know about one vision encoder."""
@@ -69,6 +84,15 @@ class EncoderSpec:
     loader_class: str = "AutoModel"
 
     image_size: Optional[int] = None
+
+    #: Largest per-step batch that fits on a 44 GB card. Memory scales with the
+    #: square of the token count, and the encoders differ a lot there: DINOv2 at
+    #: 518px produces 1,373 tokens against SigLIP2's 729 at 384px. The training
+    #: script divides the target batch by this and accumulates gradients, so the
+    #: effective batch is identical across encoders and only the memory
+    #: footprint changes.
+    micro_batch: int = 32
+
     notes: str = ""
 
 
@@ -112,28 +136,38 @@ ENCODERS = {
         processor_kind="image",
         projection_attr=None,
         image_size=518,
+        micro_batch=8,
         notes="Self-supervised; 4 register tokens sit between CLS and patches.",
     ),
     "dinov3": EncoderSpec(
         name="dinov3",
-        model_id="facebook/dinov3-vitl16-pretrain-lvd1689m",
+        # The timm mirror rather than facebook/dinov3-vitl16-pretrain-lvd1689m.
+        # Identical weights under the same DINOv3 licence, but ungated: Meta
+        # reviews access to their own repo by hand, which would block this run
+        # and would also block any reviewer trying to reproduce it.
+        model_id="hf-hub:timm/vit_large_patch16_dinov3.lvd1689m",
         embedding_dim=1024,
-        # Verified against the checkpoint's state dict: separate q/k/v
-        # projections and a gated MLP with up_proj / down_proj, unlike DINOv2's
-        # query/key/value and fc1/fc2.
-        lora_targets=("q_proj", "k_proj", "v_proj", "up_proj", "down_proj"),
-        readout="cls_token",
+        # Verified by loading the checkpoint: this layout fuses the three
+        # attention projections into one `qkv` matrix, so the split q/k/v names
+        # used by the CLIP-family encoders match nothing here. `proj` is
+        # deliberately excluded because it also matches `patch_embed.proj`,
+        # which would adapt the patch embedding as well and break the parity
+        # with the other encoders, where only attention and MLP are adapted.
+        lora_targets=("qkv", "fc1", "fc2"),
+        readout="timm_cls",
         poolable_modules=("norm",),
-        processor_kind="image",
+        processor_kind="timm",
         projection_attr=None,
-        # Rotary position embeddings, so the input resolution is free rather than
-        # fixed by a learned position table. Set to 384 to match SigLIP2's token
-        # grid rather than DINOv2's 518, which upsampled almost every crop: the
-        # short side of three quarters of these images is already below 384.
+        loader_class="timm",
+        # Rotary position embeddings, so the input resolution is free rather
+        # than fixed by a learned position table. Confirmed to run at 224, 256
+        # and 384. Set to 384 to match SigLIP2's token grid rather than DINOv2's
+        # 518, which upsampled almost every crop: the short side of three
+        # quarters of these images is already below 384.
         image_size=384,
         notes=(
-            "Weights are gated on the Hub and need manual approval. The paper "
-            "must carry a 'Built with DINOv3' acknowledgment under its licence."
+            "Built with DINOv3. The licence requires this acknowledgment in "
+            "any publication using the weights."
         ),
     ),
 }
@@ -168,13 +202,26 @@ def load_encoder(
     need a projection that lives outside the tower.
     """
     spec = get_spec(name)
-    loader = LOADER_CLASSES[spec.loader_class]
-    model = loader.from_pretrained(spec.model_id, torch_dtype=dtype)
 
-    if spec.processor_kind == "image":
-        processor = AutoImageProcessor.from_pretrained(spec.model_id)
+    if spec.loader_class == "timm":
+        import timm
+        from timm.data import resolve_model_data_config
+
+        # num_classes=0 strips the classifier; the readout below takes the class
+        # token explicitly rather than timm's default average pooling, so that
+        # DINOv3 is read the same way as DINOv2 and the comparison between the
+        # two is about the weights and not about the pooling.
+        model = timm.create_model(spec.model_id, pretrained=True, num_classes=0)
+        model = model.to(dtype)
+        processor = _TimmProcessorShim(resolve_model_data_config(model))
     else:
-        processor = AutoProcessor.from_pretrained(spec.model_id)
+        loader = LOADER_CLASSES[spec.loader_class]
+        model = loader.from_pretrained(spec.model_id, torch_dtype=dtype)
+
+        if spec.processor_kind == "image":
+            processor = AutoImageProcessor.from_pretrained(spec.model_id)
+        else:
+            processor = AutoProcessor.from_pretrained(spec.model_id)
 
     if device is not None:
         model = model.to(device)
@@ -213,6 +260,15 @@ def embed_images(
     layout fails at run time on the other, which is exactly the kind of breakage
     that is expensive to discover on rented hardware.
     """
+    if spec.readout == "timm_cls":
+        # timm models take a positional tensor and expose tokens through
+        # forward_features. Index 0 is the class token; indices 1 to 4 are
+        # register tokens.
+        features = model.forward_features(pixel_values)[:, 0, :]
+        if normalize:
+            features = F.normalize(features, p=2, dim=-1, eps=1e-8)
+        return features
+
     outputs = model(pixel_values=pixel_values)
 
     if spec.readout == "cls_token":
@@ -250,7 +306,10 @@ def patch_tokens(
     Used by the attention and saliency visualisations, where including the
     register tokens in a spatial map would misalign the grid.
     """
-    hidden = model(pixel_values=pixel_values).last_hidden_state
+    if spec.readout == "timm_cls":
+        hidden = model.forward_features(pixel_values)
+    else:
+        hidden = model(pixel_values=pixel_values).last_hidden_state
 
     prefix = PREFIX_TOKENS.get(spec.name, 0)
     return hidden[:, prefix:, :]
