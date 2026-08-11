@@ -290,8 +290,15 @@ def build_batches():
     # start costs a few cents; a job killed at 1h50m with three completed chains
     # inside it costs all of them.
     curve_seeds = (42, 7, 13)
-    for encoder in ("siglip2", "clip"):
-        done = {(0.1, 42), (0.25, 42), (0.5, 42), (1.0, 42)}
+    for encoder in ("siglip2", "clip", "dinov2", "dinov3"):
+        # What already exists differs by encoder. SigLIP2 and CLIP were the
+        # first-pass curve, so they have seed 42 at three interior fractions;
+        # the DINO pair only ever ran at the full training set, from the
+        # four-encoder comparison.
+        if encoder in ("siglip2", "clip"):
+            done = {(0.1, 42), (0.25, 42), (0.5, 42), (1.0, 42)}
+        else:
+            done = {(1.0, 42)}
         if encoder == "siglip2":
             done |= {(1.0, s) for s in curve_seeds}
 
@@ -305,8 +312,16 @@ def build_batches():
                        for s in todo(0.05)],
             "note": f"{encoder} at 5 percent, seeds {todo(0.05)}.",
         }
-        # Middle positions: two seeds per job.
-        for fraction, tag in ((0.1, "f010"), (0.25, "f025"), (0.5, "f050")):
+        # Middle positions, grouped by seed count. Runtime scales with the
+        # fraction, so three seeds at half the training set is around 90 minutes
+        # for the DINO pair, which is close enough to the ceiling that a single
+        # overrun would discard all three chains. Two fit comfortably; three do
+        # not, so a three-seed half-set position is split per seed.
+        middle = [(0.1, "f010"), (0.25, "f025")]
+        expensive = [(0.75, "f075"), (1.0, "full")]
+        (middle if len(todo(0.5)) <= 2 else expensive).append((0.5, "f050"))
+
+        for fraction, tag in middle:
             seeds = todo(fraction)
             if not seeds:
                 continue
@@ -317,7 +332,7 @@ def build_batches():
                 "note": f"{encoder} at {fraction:.0%}, seeds {seeds}.",
             }
         # Expensive positions: one seed per job, since two would not fit.
-        for fraction, tag in ((0.75, "f075"), (1.0, "full")):
+        for fraction, tag in expensive:
             for seed in todo(fraction):
                 batches[f"curve-{encoder}-{tag}-s{seed}"] = {
                     "flavor": "l40sx1", "timeout": "110m",
