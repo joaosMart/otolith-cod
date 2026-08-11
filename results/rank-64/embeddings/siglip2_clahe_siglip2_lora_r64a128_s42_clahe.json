@@ -1,0 +1,21 @@
+{
+  "encoder": {
+    "name": "siglip2",
+    "model_id": "google/siglip2-so400m-patch14-384",
+    "embedding_dim": 1152,
+    "image_size": 384
+  },
+  "adapter": "outputs/runs/siglip2_lora_r64a128_s42_clahe/adapter",
+  "merged": false,
+  "preprocessing": {
+    "apply_clahe": true,
+    "repeat_clahe": false,
+    "clip_limit": 3.0,
+    "tile_size": 25,
+    "resize_mode": "pad",
+    "description": "CLAHE applied once, clip limit 3, adaptive tile grid at 25px, aspect-preserving pad to square"
+  },
+  "n_images": 8619,
+  "feature_dim": 1152,
+  "normalized": true
+}

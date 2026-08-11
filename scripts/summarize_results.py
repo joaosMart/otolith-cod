@@ -176,6 +176,59 @@ def figure_seeds(values, path):
     fig.tight_layout(); fig.savefig(path); plt.close(fig)
 
 
+def figure_rank_sweep(points, seed_sd, path):
+    """Accuracy against LoRA rank, with the seed band for scale.
+
+    The band is what makes the figure readable: without it a reader sees five
+    slightly different bars and infers a trend, when in fact the whole range sits
+    inside the variation between two runs of the same configuration.
+    """
+    ranks = sorted(points)
+    acc = [points[r]["accuracy"][0] for r in ranks]
+    lo = [points[r]["accuracy"][0] - points[r]["accuracy"][1] for r in ranks]
+    hi = [points[r]["accuracy"][2] - points[r]["accuracy"][0] for r in ranks]
+
+    fig, ax = plt.subplots(figsize=(6.5, 4))
+    mean = float(np.mean(acc))
+    ax.axhspan(mean - seed_sd, mean + seed_sd, color="black", alpha=0.10,
+               label=f"$\\pm$1 sd between seeds ({seed_sd:.3f})")
+    ax.errorbar(range(len(ranks)), acc, yerr=[lo, hi], marker="o", capsize=4,
+                color=LORA_COLOR, lw=1.5)
+    ax.set_xticks(range(len(ranks)))
+    ax.set_xticklabels([f"{r}\n{points[r]['params']/1e6:.1f}M" for r in ranks])
+    ax.set_xlabel("LoRA rank, and trainable parameters")
+    ax.set_ylabel("Accuracy")
+    ax.set_ylim(0.60, 0.70)
+    ax.legend(fontsize=8, loc="lower right")
+    fig.tight_layout(); fig.savefig(path); plt.close(fig)
+
+
+def figure_learning_curves(curves, frozen, path):
+    """Accuracy against the number of labelled images used for adaptation."""
+    fig, ax = plt.subplots(figsize=(7, 4.4))
+    colors = {"siglip2": LORA_COLOR, "clip": FROZEN_COLOR}
+    names = {"siglip2": "SigLIP2", "clip": "CLIP"}
+    ticks = set()
+    for encoder, points in curves.items():
+        n = sorted(points)
+        ticks.update(n)
+        label = names.get(encoder, encoder)
+        ax.plot(n, [points[k] for k in n], marker="o", lw=1.6,
+                color=colors.get(encoder), label=f"{label} + LoRA")
+        if encoder in frozen:
+            ax.axhline(frozen[encoder], ls="--", lw=1.2, color=colors.get(encoder),
+                       alpha=0.75,
+                       label=f"{label} frozen, all {max(n):,} images")
+    ax.set_xscale("log")
+    ax.set_xticks(sorted(ticks))
+    ax.set_xticklabels([f"{t:,}" for t in sorted(ticks)])
+    ax.minorticks_off()
+    ax.set_xlabel("Labelled images used for adaptation (log scale)")
+    ax.set_ylabel("Accuracy")
+    ax.legend(fontsize=8, loc="lower right")
+    fig.tight_layout(); fig.savefig(path); plt.close(fig)
+
+
 def figure_attribution(frozen_shap, lora_shap, path_abs, path_share):
     """Attribution per feature group, absolute and as a share of the total."""
     embed_key = next(k for k in frozen_shap if "mbed" in k)
