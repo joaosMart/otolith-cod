@@ -272,6 +272,59 @@ def build_batches():
             "note": f"{encoder} at 50 percent of the training set.",
         }
 
+    # Experiment G, second pass. The first pass gave one run per point, which
+    # supports a picture but not an error bar, and four x-positions is too few to
+    # fit the three-parameter saturating curve that would say how many labels the
+    # method actually wants. This pass adds two positions (5% and 75%) and takes
+    # every position to three seeds.
+    #
+    # Only the runs that do not already exist are listed. SigLIP2 at the full
+    # training set is already covered by the five-seed batches above, and seed 42
+    # is already done at 10, 25 and 50 percent for both encoders.
+    #
+    # Job sizing is deliberately timid. Runtime is a fixed cost of roughly a
+    # quarter hour for extraction and classification plus a training cost that
+    # scales with the fraction, but early stopping makes the training term vary
+    # by a factor of two or more between seeds, and nothing has ever survived
+    # past about 1h43m regardless of the requested timeout. A wasted container
+    # start costs a few cents; a job killed at 1h50m with three completed chains
+    # inside it costs all of them.
+    curve_seeds = (42, 7, 13)
+    for encoder in ("siglip2", "clip"):
+        done = {(0.1, 42), (0.25, 42), (0.5, 42), (1.0, 42)}
+        if encoder == "siglip2":
+            done |= {(1.0, s) for s in curve_seeds}
+
+        def todo(fraction):
+            return [s for s in curve_seeds if (fraction, s) not in done]
+
+        # Cheapest position: all three seeds fit in one job with room to spare.
+        batches[f"curve-{encoder}-f005"] = {
+            "flavor": "l40sx1", "timeout": "110m",
+            "groups": [lora_chain(encoder, seed=s, fraction=0.05)
+                       for s in todo(0.05)],
+            "note": f"{encoder} at 5 percent, seeds {todo(0.05)}.",
+        }
+        # Middle positions: two seeds per job.
+        for fraction, tag in ((0.1, "f010"), (0.25, "f025"), (0.5, "f050")):
+            seeds = todo(fraction)
+            if not seeds:
+                continue
+            batches[f"curve-{encoder}-{tag}"] = {
+                "flavor": "l40sx1", "timeout": "110m",
+                "groups": [lora_chain(encoder, seed=s, fraction=fraction)
+                           for s in seeds],
+                "note": f"{encoder} at {fraction:.0%}, seeds {seeds}.",
+            }
+        # Expensive positions: one seed per job, since two would not fit.
+        for fraction, tag in ((0.75, "f075"), (1.0, "full")):
+            for seed in todo(fraction):
+                batches[f"curve-{encoder}-{tag}-s{seed}"] = {
+                    "flavor": "l40sx1", "timeout": "110m",
+                    "groups": [lora_chain(encoder, seed=seed, fraction=fraction)],
+                    "note": f"{encoder} at {fraction:.0%}, seed {seed}.",
+                }
+
     return batches
 
 
@@ -307,27 +360,15 @@ def main():
     flavor = args.flavor or batch["flavor"]
     timeout = args.timeout or batch["timeout"]
 
-    argv = [
-        "hf", "jobs", "uv", "run",
-        "--flavor", flavor,
-        "--timeout", timeout,
-        "--secrets", "HF_TOKEN",
-        "--name", f"otolith-{args.batch}",
-        "--label", "project=otolith-cod",
-        "--label", f"batch={args.batch}",
-    ]
-    if args.detach:
-        argv.append("--detach")
-    argv += [str(project_root / "scripts/hf/job_runner.py"), "--"]
-    argv += ["--repo", args.bundle_repo,
-             "--output-repo", args.output_repo,
-             "--run-group", args.batch]
+    script_args = ["--repo", args.bundle_repo,
+                   "--output-repo", args.output_repo,
+                   "--run-group", args.batch]
     if batch.get("needs_previous"):
-        argv.append("--seed-outputs")
+        script_args.append("--seed-outputs")
     # Only the batch name crosses argv. The runner reads the definition from
     # this same file inside the bundle, so there is one source of truth and no
     # argument long enough to trip the client's local-file detection.
-    argv += ["--batch", args.batch]
+    script_args += ["--batch", args.batch]
 
     print(f"Batch '{args.batch}': {len(batch['groups'])} chains, "
           f"{len(_flatten(batch['groups']))} commands on {flavor}, timeout {timeout}")
@@ -343,13 +384,48 @@ def main():
         print(f"\nAt ${hourly:.2f}/hour this batch costs at most "
               f"${hourly * _hours(timeout):.2f} if it runs to the full timeout.")
 
-    print(f"\n$ {' '.join(shlex.quote(a) for a in argv)}\n")
+    runner = str(project_root / "scripts/hf/job_runner.py")
+    print(f"\nrun_uv_job({runner!r}, script_args={script_args!r}, "
+          f"flavor={flavor!r}, timeout={timeout!r})\n")
 
     if args.dry_run:
         print("Dry run: nothing submitted.")
         return 0
 
-    return subprocess.run(argv).returncode
+    return _submit(runner, script_args, flavor, timeout, args.batch)
+
+
+def _submit(runner, script_args, flavor, timeout, batch_name):
+    """Submit through the Python API rather than the `hf` command line.
+
+    The CLI was the original route and is no longer a good one. It requires a
+    terminal (it aborts with an ioctl error when its output is redirected), it
+    inspects every argument after `--` to decide whether it looks like a local
+    file to upload, and its flags are not stable: `--name` and `--label` both
+    existed when these batches were first submitted and have since been removed,
+    which caused sixteen submissions to fail with a usage error while the
+    surrounding shell loop reported nothing. The API takes the same arguments,
+    has none of those behaviours, and returns the job id instead of printing it,
+    so submissions can be recorded rather than scraped back out of the console.
+    """
+    from huggingface_hub import get_token, run_uv_job
+
+    job = run_uv_job(
+        runner,
+        script_args=script_args,
+        flavor=flavor,
+        timeout=timeout,
+        secrets={"HF_TOKEN": get_token()},
+    )
+    print(f"Submitted {batch_name}: job {job.id}")
+    print(f"  https://huggingface.co/jobs/{job.owner.name}/{job.id}")
+
+    log = project_root / "outputs/hf_jobs.jsonl"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    with log.open("a") as handle:
+        handle.write(json.dumps({"batch": batch_name, "job_id": job.id,
+                                 "flavor": flavor, "timeout": timeout}) + "\n")
+    return 0
 
 
 def _hours(timeout: str) -> float:
