@@ -119,6 +119,30 @@ def bootstrap_asymptote(by_n):
     return np.array(draws)
 
 
+def fit_quality(by_n, popt):
+    """Residual spread of the fitted curve against the per-point means.
+
+    Worth reporting separately from the parameter uncertainty. The measured CLIP
+    curve is not smoothly concave: it moves in steps, with pairs of adjacent
+    training-set sizes landing on top of each other and jumps between them. A
+    saturating curve cannot reproduce that, so the residuals are structured
+    rather than random, and a fit can look confident while systematically
+    missing the shape. If the residual spread here is comparable to or larger
+    than the seed spread, the functional form is the limitation and the
+    asymptote should not be quoted at all.
+    """
+    sizes = sorted(by_n)
+    means = np.array([np.mean(list(by_n[n].values())) for n in sizes])
+    predicted = saturating(np.array(sizes, float), *popt)
+    residual_sd = float(np.sqrt(np.mean((means - predicted) ** 2)))
+    within = [np.ptp(list(by_n[n].values())) for n in sizes if len(by_n[n]) > 1]
+    return {
+        "residual_sd_vs_point_means": residual_sd,
+        "mean_within_point_range": float(np.mean(within)) if within else None,
+        "residuals": (means - predicted).tolist(),
+    }
+
+
 def crossing(popt, target, lo=10, hi=10_000_000):
     """Smallest n whose fitted accuracy reaches `target`."""
     a, b, c = popt
@@ -176,6 +200,7 @@ def main():
                 "asymptote_upper_bound_identified": bool(at_bound < 0.05),
                 "b": float(popt[1]), "c": float(popt[2]),
                 "n_bootstrap_converged": int(len(draws)),
+                **fit_quality(by_n, popt),
             }
             if encoder in frozen:
                 n_match = crossing(popt, frozen[encoder])
@@ -217,6 +242,12 @@ def main():
             print(f"  no fit: needs at least 4 training-set sizes with more than"
                   f" one run each ({len(entry['n'])} sizes, {singles} of them"
                   " single-run)")
+            continue
+        rsd, within = f["residual_sd_vs_point_means"], f["mean_within_point_range"]
+        if within and rsd > within:
+            print(f"  the saturating form does not describe this curve: residual"
+                  f" sd {rsd:.4f} exceeds the mean within-point range {within:.4f},"
+                  "\n    so the misfit is shape, not noise. Asymptote not reported.")
             continue
         bound = f["asymptote_lower_bound_95"]
         print(f"  asymptote: at least {bound:.3f} with 95% confidence"
