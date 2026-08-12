@@ -1,0 +1,66 @@
+{
+  "commands": [
+    {
+      "command": "make_split.py",
+      "returncode": 0,
+      "minutes": 0.06,
+      "chain": 1
+    },
+    {
+      "command": "finetune_encoder.py --encoder siglip2 --mode full --seed 42 --split-file outputs/splits/main_split.json --train-fraction 0.75",
+      "returncode": 0,
+      "minutes": 24.66,
+      "chain": 2
+    },
+    {
+      "command": "extract_embeddings.py --encoder siglip2 --state-dict outputs/runs/siglip2_full_f0.75_s42_clahe/encoder.pt",
+      "returncode": 0,
+      "minutes": 1.0,
+      "chain": 2
+    },
+    {
+      "command": "train_classifier.py --embeddings outputs/embeddings/siglip2_clahe_siglip2_full_f0.75_s42_clahe.npz --eval-mode bootstrap --split-file outputs/splits/main_split.json --output-dir outputs/results/siglip2_full_f0.75_s42_clahe/bootstrap",
+      "returncode": 0,
+      "minutes": 1.57,
+      "chain": 2
+    },
+    {
+      "command": "finetune_encoder.py --encoder siglip2 --mode full --seed 7 --split-file outputs/splits/main_split.json --train-fraction 0.75",
+      "returncode": 0,
+      "minutes": 25.96,
+      "chain": 3
+    },
+    {
+      "command": "extract_embeddings.py --encoder siglip2 --state-dict outputs/runs/siglip2_full_f0.75_s7_clahe/encoder.pt",
+      "returncode": 0,
+      "minutes": 1.02,
+      "chain": 3
+    },
+    {
+      "command": "train_classifier.py --embeddings outputs/embeddings/siglip2_clahe_siglip2_full_f0.75_s7_clahe.npz --eval-mode bootstrap --split-file outputs/splits/main_split.json --output-dir outputs/results/siglip2_full_f0.75_s7_clahe/bootstrap",
+      "returncode": 0,
+      "minutes": 1.59,
+      "chain": 3
+    },
+    {
+      "command": "finetune_encoder.py --encoder siglip2 --mode full --seed 13 --split-file outputs/splits/main_split.json --train-fraction 0.75",
+      "returncode": 0,
+      "minutes": 30.3,
+      "chain": 4
+    },
+    {
+      "command": "extract_embeddings.py --encoder siglip2 --state-dict outputs/runs/siglip2_full_f0.75_s13_clahe/encoder.pt",
+      "returncode": 0,
+      "minutes": 1.02,
+      "chain": 4
+    },
+    {
+      "command": "train_classifier.py --embeddings outputs/embeddings/siglip2_clahe_siglip2_full_f0.75_s13_clahe.npz --eval-mode bootstrap --split-file outputs/splits/main_split.json --output-dir outputs/results/siglip2_full_f0.75_s13_clahe/bootstrap",
+      "returncode": 0,
+      "minutes": 1.68,
+      "chain": 4
+    }
+  ],
+  "job_id": "6a7c36edf6d0f3ee953aadc5",
+  "accelerator": "gpu"
+}

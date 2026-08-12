@@ -291,3 +291,77 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+def figure_lora_vs_full(points, path=FIGURES / "lora_vs_full_curves.png"):
+    """SigLIP2 adapted two ways, at every label budget.
+
+    Kept separate from the four-encoder figure because it answers a different
+    question. That one asks how many labels adaptation needs; this one asks
+    whether the low-rank constraint costs anything, and the answer is not the
+    one the parameter-efficient fine-tuning literature would predict for a
+    low-shot regime.
+    """
+    import re as _re
+    from collections import defaultdict as _dd
+    modes = _dd(lambda: _dd(dict))
+    rx = _re.compile(r"^siglip2_(?P<mode>lora_r16a32|full)"
+                     r"(?:_f(?P<frac>[\d.]+))?_s(?P<seed>\d+)_clahe$")
+    for p in RESULTS.glob("**/bootstrap/results.json"):
+        m = rx.match(p.parent.parent.name)
+        if not m:
+            continue
+        mode = "full" if m["mode"] == "full" else "lora"
+        n = int(round(float(m["frac"] or 1.0) * FT_TRAIN))
+        modes[mode][n][int(m["seed"])] = json.loads(
+            p.read_text())["aggregated_results"]["accuracy"]["mean"]
+    if not modes["full"]:
+        return None
+
+    fig, ax = plt.subplots(figsize=(7.0, 4.4))
+    style = {"lora": ("#C44E52", "LoRA, rank 16 (1.84\\% of weights)"),
+             "full": ("#4C72B0", "Full fine-tuning (100\\% of weights)")}
+    summary = {}
+    for mode in ("full", "lora"):
+        by_n = modes[mode]
+        sizes = sorted(by_n)
+        mean = np.array([np.mean(list(by_n[n].values())) for n in sizes])
+        lo = np.array([min(by_n[n].values()) for n in sizes])
+        hi = np.array([max(by_n[n].values()) for n in sizes])
+        colour, label = style[mode]
+        ax.errorbar(sizes, mean, yerr=[mean - lo, hi - mean], marker="o",
+                    capsize=3, lw=1.7, color=colour,
+                    label=label.replace("\\%", "%"), zorder=3)
+        summary[mode] = {"n": sizes, "mean": mean.tolist(),
+                         "seeds": [len(by_n[n]) for n in sizes]}
+
+    shared = sorted(set(modes["lora"]) & set(modes["full"]))
+    deltas = [np.mean(list(modes["full"][n].values()))
+              - np.mean(list(modes["lora"][n].values())) for n in shared]
+    summary["delta_pp"] = [100 * d for d in deltas]
+    summary["budgets_favouring_full"] = int(sum(d > 0 for d in deltas))
+    summary["n_budgets"] = len(deltas)
+
+    ax.set_xscale("log")
+    ax.set_xticks(shared)
+    ax.set_xticklabels([f"{t:,}" for t in shared])
+    ax.minorticks_off()
+    ax.set_xlabel("Labelled images used for adaptation (log scale)")
+    ax.set_ylabel("Accuracy")
+    ax.grid(alpha=0.3)
+    ax.legend(fontsize=8.5, loc="lower right", framealpha=0.92)
+    fig.tight_layout()
+    fig.savefig(path, dpi=300)
+    plt.close(fig)
+    return summary
+
+
+if __name__ == "__main__":
+    extra = figure_lora_vs_full(None)
+    if extra:
+        out = json.loads(SUMMARY.read_text()) if SUMMARY.exists() else {}
+        out["siglip2_lora_vs_full"] = extra
+        SUMMARY.write_text(json.dumps(out, indent=2))
+        print(f"\nLoRA vs full fine-tuning: full ahead at "
+              f"{extra['budgets_favouring_full']}/{extra['n_budgets']} budgets, "
+              f"mean {np.mean(extra['delta_pp']):+.2f} pp")
