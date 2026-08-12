@@ -56,6 +56,7 @@ NAMES = {"siglip2": "SigLIP2", "clip": "CLIP",
 
 RUN = re.compile(r"^(?P<enc>clip|siglip2|dinov2|dinov3)_lora_r16a32"
                  r"(?:_f(?P<frac>[\d.]+))?_s(?P<seed>\d+)_clahe$")
+FULL_RUN = re.compile(r"^siglip2_full(?:_f(?P<frac>[\d.]+))?_s(?P<seed>\d+)_clahe$")
 
 
 def collect():
@@ -70,6 +71,28 @@ def collect():
         acc = json.loads(path.read_text())["aggregated_results"]["accuracy"]["mean"]
         points[m["enc"]][n][int(m["seed"])] = acc
     return points
+
+
+def collect_full():
+    """SigLIP2 with every weight trainable, at the same six label budgets.
+
+    Drawn on the four-encoder figure as well as on its own, because the two
+    placements answer different questions with the same numbers. On its own
+    axis the gap between the adaptation methods is the subject, and the axis is
+    tight enough to read a point of accuracy. Here it is the control: it shows
+    that the same gap is small beside the distance from any frozen baseline,
+    which is the claim the paper actually rests on. Leaving it off invited the
+    opposite reading, that the low-rank curves are the ceiling.
+    """
+    by_n = defaultdict(dict)
+    for path in RESULTS.glob("**/bootstrap/results.json"):
+        m = FULL_RUN.match(path.parent.parent.name)
+        if not m:
+            continue
+        n = int(round(float(m["frac"] or 1.0) * FT_TRAIN))
+        by_n[n][int(m["seed"])] = json.loads(
+            path.read_text())["aggregated_results"]["accuracy"]["mean"]
+    return by_n
 
 
 def frozen_baselines():
@@ -230,6 +253,26 @@ def main():
             entry["frozen"] = frozen[encoder]
         report[encoder] = entry
 
+    # Full fine-tuning carries SigLIP2's own colour, because it is that encoder
+    # rather than a fifth one, and a fifth colour would say otherwise. The open
+    # marker and broken line are what separate the two adaptation methods. It
+    # is drawn last so the overlap with the SigLIP2 low-rank curve resolves in
+    # its favour, the two running within about a point of each other.
+    full = collect_full()
+    full_entry = None
+    if full:
+        sizes = sorted(full)
+        means = np.array([np.mean(list(full[n].values())) for n in sizes])
+        lo = np.array([min(full[n].values()) for n in sizes])
+        hi = np.array([max(full[n].values()) for n in sizes])
+        ax.errorbar(sizes, means, yerr=[means - lo, hi - means], marker="s",
+                    ms=5, markerfacecolor="white", markeredgewidth=1.4,
+                    ls="-.", capsize=3, lw=1.6, color=COLORS["siglip2"],
+                    label="SigLIP2 + full fine-tuning", zorder=4)
+        full_entry = {"n": sizes, "mean": means.tolist(), "min": lo.tolist(),
+                      "max": hi.tolist(),
+                      "runs_per_point": [len(full[n]) for n in sizes]}
+
     ax.set_xscale("log")
     ticks = sorted({n for e in report for n in report[e]["n"]})
     ax.set_xticks(ticks)
@@ -240,10 +283,19 @@ def main():
     ax.grid(alpha=0.3)
 
     handles, labels = ax.get_legend_handles_labels()
+    if full_entry:
+        # Plotted last to win the overlap, but listed next to its own encoder,
+        # since the pairing of the two SigLIP2 entries is what the reader is
+        # meant to compare.
+        handles.insert(1, handles.pop())
+        labels.insert(1, labels.pop())
     handles.append(plt.Line2D([], [], ls="--", lw=1.0, color="#888888"))
     labels.append(f"same encoder frozen, all {FT_TRAIN:,}")
-    ax.legend(handles, labels, fontsize=7.5, loc="lower right", frameon=True,
-              framealpha=0.92, ncols=2, columnspacing=1.0, handlelength=1.6)
+    # Six entries at the old 7.5pt reduce to under 5pt once the figure is set
+    # at the column width the paper uses, which is below what the journal will
+    # accept. The figure is placed at full \textwidth for the same reason.
+    ax.legend(handles, labels, fontsize=8.5, loc="lower right", frameon=True,
+              framealpha=0.92, ncols=2, columnspacing=1.0, handlelength=1.8)
     fig.tight_layout()
 
     FIGURES.mkdir(parents=True, exist_ok=True)
@@ -251,7 +303,22 @@ def main():
     plt.close(fig)
 
     SUMMARY.parent.mkdir(parents=True, exist_ok=True)
-    SUMMARY.write_text(json.dumps(report, indent=2))
+    # Kept out of `report` itself so the per-encoder loops below, which look for
+    # a saturating fit and a frozen baseline, do not treat it as an encoder and
+    # report a missing fit that was never attempted.
+    SUMMARY.write_text(json.dumps(
+        {**report, **({"siglip2_full_finetune": full_entry} if full_entry else {})},
+        indent=2))
+
+    if full_entry:
+        print("\nSigLIP2, full fine-tuning")
+        for n, m, c in zip(full_entry["n"], full_entry["mean"],
+                           full_entry["runs_per_point"]):
+            lora = report.get("siglip2", {}).get("mean", [])
+            ns = report.get("siglip2", {}).get("n", [])
+            gap = (f"  ({100 * (m - lora[ns.index(n)]):+.2f} pp vs LoRA)"
+                   if n in ns else "")
+            print(f"  n={n:5d}  acc={m:.4f}  ({c} runs){gap}")
 
     for encoder, entry in report.items():
         print(f"\n{NAMES.get(encoder, encoder)}")
