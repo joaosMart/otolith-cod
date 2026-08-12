@@ -85,6 +85,12 @@ def parse_args():
                         "survive even if the upload step fails.")
     p.add_argument("--run-group", default=None,
                    help="Subdirectory grouping this batch of results.")
+    p.add_argument("--keep-embeddings", action="store_true",
+                   help="Upload the .npz caches too. Off by default because "
+                        "they are large and regenerable, but a batch whose "
+                        "whole purpose is downstream analysis of the "
+                        "embeddings has to ship them, otherwise the analysis "
+                        "can only ever run inside a GPU job.")
     p.add_argument("--seed-outputs", action="store_true",
                    help="Pull artifacts from previous batches into outputs/ "
                         "before running. Needed whenever a batch consumes "
@@ -288,7 +294,8 @@ def publish(workdir: Path, args, summary):
                 # Model weights and embedding caches are large and regenerable;
                 # keeping them out makes the results repo something you can
                 # actually clone. Adapters are small and worth keeping.
-                ignore_patterns=["*.npz", "encoder.pt"],
+                ignore_patterns=(["encoder.pt"] if args.keep_embeddings
+                                 else ["*.npz", "encoder.pt"]),
             )
             log("upload complete")
         except Exception as exc:

@@ -60,6 +60,10 @@ def parse_args():
     p.add_argument("--clahe", action=argparse.BooleanOptionalAction, default=True)
     p.add_argument("--repeat-clahe", action=argparse.BooleanOptionalAction, default=False)
     p.add_argument("--resize-mode", default=DEFAULT_RESIZE_MODE, choices=RESIZE_MODES)
+    p.add_argument("--image-size", type=int, default=None,
+                   help="Override the encoder input resolution. Must match the "
+                        "size the adapter was trained at, or the patch grid the "
+                        "adapted weights expect will not be the one they get.")
     p.add_argument("--batch-size", type=int, default=64)
     p.add_argument("--num-workers", type=int, default=4)
     p.add_argument("--output-dir", default="outputs/embeddings")
@@ -129,7 +133,7 @@ def main():
     print(f"Output: {output_path}")
     print("=" * 68)
 
-    model, processor, spec = load_encoder(args.encoder)
+    model, processor, spec = load_encoder(args.encoder, image_size=args.image_size)
     image_processor = getattr(processor, "image_processor", processor)
 
     if args.state_dict:

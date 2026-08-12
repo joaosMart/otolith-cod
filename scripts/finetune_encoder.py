@@ -112,6 +112,12 @@ def parse_args():
     p.add_argument("--repeat-clahe", action=argparse.BooleanOptionalAction, default=False)
     p.add_argument("--resize-mode", default=DEFAULT_RESIZE_MODE, choices=RESIZE_MODES,
                    help="How a wide otolith crop is fitted to the square input.")
+    p.add_argument("--image-size", type=int, default=None,
+                   help="Override the encoder's input resolution. Only DINOv3 "
+                        "accepts this, because rotary embeddings make the patch "
+                        "grid free. Tests whether the reading axis is starved: "
+                        "padding the median 780x332 crop square and resizing to "
+                        "384 halves the resolution along it.")
 
     p.add_argument("--split-file", default=None,
                    help="Fixed train/test split by measurement ID. Pass the same "
@@ -144,6 +150,10 @@ def build_run_name(args) -> str:
         parts.append(f"r{args.rank}a{args.lora_alpha}")
     if args.train_fraction < 1.0:
         parts.append(f"f{args.train_fraction:g}")
+    # In the name, so a resolution sweep cannot overwrite the 384 runs the rest
+    # of the paper is built on.
+    if args.image_size is not None:
+        parts.append(f"px{args.image_size}")
     parts.append(f"s{args.seed}")
 
     slug = PreprocessConfig(
@@ -359,7 +369,7 @@ def main():
     print(f"Preprocessing: {preprocess.describe()}")
     print("=" * 68)
 
-    model, processor, spec = load_encoder(args.encoder)
+    model, processor, spec = load_encoder(args.encoder, image_size=args.image_size)
     image_processor = getattr(processor, "image_processor", processor)
 
     model, strategy = configure_trainable(model, spec, args)

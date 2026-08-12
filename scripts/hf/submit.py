@@ -73,42 +73,56 @@ def run_npz(encoder, run_name):
     return f"outputs/embeddings/{encoder}_clahe_{run_name}.npz"
 
 
-def finetune(encoder, mode="lora", seed=42, rank=16, alpha=32, fraction=1.0, extra=""):
+def finetune(encoder, mode="lora", seed=42, rank=16, alpha=32, fraction=1.0,
+             image_size=None, extra=""):
     cmd = (f"finetune_encoder.py --encoder {encoder} --mode {mode} --seed {seed} "
            f"--split-file {SPLIT}")
     if mode in ("lora", "lora+pool"):
         cmd += f" --rank {rank} --lora-alpha {alpha}"
     if fraction < 1.0:
         cmd += f" --train-fraction {fraction}"
+    if image_size:
+        cmd += f" --image-size {image_size}"
     return cmd + (f" {extra}" if extra else "")
 
 
-def run_name_for(encoder, mode="lora", seed=42, rank=16, alpha=32, fraction=1.0):
+def run_name_for(encoder, mode="lora", seed=42, rank=16, alpha=32, fraction=1.0,
+                 image_size=None):
     """Mirrors build_run_name() in finetune_encoder.py."""
     parts = [encoder, mode.replace("+", "-")]
     if mode in ("lora", "lora+pool"):
         parts.append(f"r{rank}a{alpha}")
     if fraction < 1.0:
         parts.append(f"f{fraction:g}")
+    if image_size:
+        parts.append(f"px{image_size}")
     parts.append(f"s{seed}")
     parts.append("clahe")
     return "_".join(parts)
 
 
-def lora_chain(encoder, mode="lora", seed=42, rank=16, alpha=32, fraction=1.0):
+def lora_chain(encoder, mode="lora", seed=42, rank=16, alpha=32, fraction=1.0,
+               image_size=None):
     """Fine-tune, extract with the trained weights, then classify.
 
     One logical unit: the later steps are meaningless without the earlier ones,
     which is what makes it the right granularity for the runner to abandon on
     failure. Full fine-tuning saves a state dict rather than an adapter
     directory, so its extraction is invoked differently.
+
+    `image_size` has to reach the extraction step as well as the training one.
+    The adapter is trained against a particular patch grid, and reading it out
+    at the default 384 would hand those weights a different grid from the one
+    they were fitted to, which fails quietly rather than loudly: the shapes
+    still match, because rotary embeddings do not care how many tokens arrive.
     """
-    name = run_name_for(encoder, mode, seed, rank, alpha, fraction)
+    name = run_name_for(encoder, mode, seed, rank, alpha, fraction, image_size)
     weights = (f"--state-dict outputs/runs/{name}/encoder.pt" if mode == "full"
                else f"--adapter outputs/runs/{name}/adapter")
+    px = f" --image-size {image_size}" if image_size else ""
     return [
-        finetune(encoder, mode, seed, rank, alpha, fraction),
-        f"extract_embeddings.py --encoder {encoder} {weights}",
+        finetune(encoder, mode, seed, rank, alpha, fraction, image_size),
+        f"extract_embeddings.py --encoder {encoder} {weights}{px}",
         classify(run_npz(encoder, name), name),
     ]
 
@@ -371,6 +385,57 @@ def build_batches():
             "note": f"siglip2 FULL fine-tune at {fraction:.0%}, seeds {seeds}.",
         }
 
+    # Experiment H: is the ceiling in the labels or in the pixels?
+    #
+    # The learning curves are flat over their last segment for every encoder and
+    # for full fine-tuning, so more labelled otoliths of the same kind buy
+    # nothing. That makes the constraint representational, and there is an
+    # obvious candidate. The median crop is 780 by 332 pixels. Padding it square
+    # and resizing to 384 downsamples by 2.03x along the axis the increments are
+    # counted on, and leaves 58% of the canvas as border. The increments that
+    # separate an eight from a nine are the ones packed tightest at the margin,
+    # and they are the first casualty of that.
+    #
+    # DINOv3 is the only encoder that can test this without a confound. Its
+    # rotary embeddings make the patch grid free, so the resolution changes and
+    # nothing else does. The learned-table encoders would need their position
+    # embedding interpolated, which is a second intervention.
+    #
+    # 512 first as a gate, because it is 1.78x the tokens rather than 4x. If it
+    # does not clear the 1.6 pp seed spread, 768 is unlikely to be worth $14.
+    for px, tag, flavor, note in ((512, "px512", "l40sx1", "gate"),
+                                  (768, "px768", "a100-large", "native scale")):
+        for seed in curve_seeds:
+            batches[f"res-dinov3-{tag}-s{seed}"] = {
+                "flavor": flavor, "timeout": "110m",
+                "groups": [lora_chain("dinov3", seed=seed, image_size=px)],
+                "note": f"DINOv3 LoRA at {px}px, seed {seed} ({note}). "
+                        f"Compare against the {px // 16}x{px // 16} token grid "
+                        "of the 384px runs already in the paper.",
+            }
+
+    # Experiment I: everything that can be squeezed out downstream of the
+    # encoder, which is all of it once the embeddings exist.
+    #
+    # This job does no training. It re-extracts the embeddings for the adapted
+    # runs the analysis needs and ships the .npz caches, which the other
+    # batches deliberately discard. Threshold placement, stacking the ordinal
+    # head's logits, concatenating two encoders and test-time augmentation are
+    # then all local arithmetic on those arrays, so they can be iterated on
+    # without a GPU and without paying for a container per attempt.
+    squeeze_runs = [("siglip2", run_name_for("siglip2", seed=s)) for s in curve_seeds]
+    squeeze_runs += [(e, run_name_for(e)) for e in ("dinov3", "dinov2", "clip")]
+    batches["squeeze"] = {
+        "flavor": "l40sx1", "timeout": "90m",
+        "groups": ([[extract("siglip2"), extract("dinov3")]]
+                   + [[extract(e, adapter=f"outputs/runs/{name}/adapter")]
+                      for e, name in squeeze_runs]),
+        "needs_previous": True,
+        "keep_embeddings": True,
+        "note": "Inference only. Frozen and adapted embeddings for the "
+                "downstream analysis, with the .npz caches kept.",
+    }
+
     return batches
 
 
@@ -411,6 +476,8 @@ def main():
                    "--run-group", args.batch]
     if batch.get("needs_previous"):
         script_args.append("--seed-outputs")
+    if batch.get("keep_embeddings"):
+        script_args.append("--keep-embeddings")
     # Only the batch name crosses argv. The runner reads the definition from
     # this same file inside the bundle, so there is one source of truth and no
     # argument long enough to trip the client's local-file detection.

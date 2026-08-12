@@ -9,7 +9,7 @@ meant finding all five. Now an encoder is one `EncoderSpec` entry and the script
 never branch on model name.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Optional, Sequence, Tuple
 
 import torch
@@ -195,13 +195,31 @@ def load_encoder(
     name: str,
     device: Optional[torch.device] = None,
     dtype: torch.dtype = torch.float32,
+    image_size: Optional[int] = None,
 ) -> Tuple[torch.nn.Module, object, EncoderSpec]:
     """Load an encoder and its image processor.
 
     Returns the full model rather than the vision tower, because some readouts
     need a projection that lives outside the tower.
+
+    `image_size` overrides the spec's default. Only the rotary-embedding
+    encoders can honour it: DINOv3 derives position from the token index rather
+    than from a learned table, so the patch grid can change without touching a
+    weight. The learned-table encoders would need their position embedding
+    interpolated, which is a different intervention with its own confound, so
+    this raises rather than silently doing it. The override exists to test
+    whether the reading axis is resolution-starved: the median crop is 780 by
+    332 pixels, and padding it square before resizing to 384 downsamples the
+    axis the increments are counted along by almost exactly a factor of two.
     """
     spec = get_spec(name)
+    if image_size is not None and image_size != spec.image_size:
+        if spec.loader_class != "timm":
+            raise ValueError(
+                f"'{name}' uses learned position embeddings, so its input size "
+                f"is fixed at {spec.image_size}. Only the timm-loaded rotary "
+                "encoders (DINOv3) accept an image-size override.")
+        spec = replace(spec, image_size=image_size)
 
     if spec.loader_class == "timm":
         import timm
@@ -211,9 +229,14 @@ def load_encoder(
         # token explicitly rather than timm's default average pooling, so that
         # DINOv3 is read the same way as DINOv2 and the comparison between the
         # two is about the weights and not about the pooling.
-        model = timm.create_model(spec.model_id, pretrained=True, num_classes=0)
+        model = timm.create_model(spec.model_id, pretrained=True, num_classes=0,
+                                  img_size=spec.image_size)
         model = model.to(dtype)
-        processor = _TimmProcessorShim(resolve_model_data_config(model))
+        data_config = resolve_model_data_config(model)
+        # resolve_model_data_config reads the pretrained tag's own input size,
+        # which is the default rather than the one just requested.
+        data_config["input_size"] = (3, spec.image_size, spec.image_size)
+        processor = _TimmProcessorShim(data_config)
     else:
         loader = LOADER_CLASSES[spec.loader_class]
         model = loader.from_pretrained(spec.model_id, torch_dtype=dtype)
