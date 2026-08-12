@@ -340,6 +340,37 @@ def build_batches():
                     "note": f"{encoder} at {fraction:.0%}, seed {seed}.",
                 }
 
+    # Experiment G, third pass: the same curve under full fine-tuning.
+    #
+    # This is the experiment that turns a null result into a positive one. At
+    # the full training set LoRA and full fine-tuning are indistinguishable,
+    # which says nothing about why. Mai et al. attribute PEFT's advantage to an
+    # implicit regulariser, which predicts that the gap should open up as labels
+    # become scarce. That prediction is testable here and nowhere else in the
+    # paper.
+    #
+    # SigLIP2 rather than DINOv3, despite DINOv3 having the higher point
+    # estimate: its lead is 1.4 points against 1.6 points of seed noise, so it
+    # is not resolvably the best, and SigLIP2 is where both the existing
+    # full-fine-tune baseline and the five-seed LoRA reference already sit.
+    #
+    # Needs the 80 GB card at every fraction, since the memory requirement comes
+    # from the model rather than the dataset. Full fine-tuning trains in 28
+    # minutes against LoRA's 62, because it reaches its best epoch at 7 rather
+    # than 13, so the whole curve is cheaper than the LoRA one it mirrors.
+    sft_done = {(1.0, 42)}
+    for fraction, tag in ((0.05, "f005"), (0.1, "f010"), (0.25, "f025"),
+                          (0.5, "f050"), (0.75, "f075"), (1.0, "full")):
+        seeds = [s for s in curve_seeds if (fraction, s) not in sft_done]
+        if not seeds:
+            continue
+        batches[f"sftcurve-siglip2-{tag}"] = {
+            "flavor": "a100-large", "timeout": "110m",
+            "groups": [lora_chain("siglip2", mode="full", seed=s, fraction=fraction)
+                       for s in seeds],
+            "note": f"siglip2 FULL fine-tune at {fraction:.0%}, seeds {seeds}.",
+        }
+
     return batches
 
 

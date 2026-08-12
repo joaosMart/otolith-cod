@@ -49,10 +49,12 @@ FT_TRAIN = 5860          # images available for adaptation at fraction 1.0
 N_BOOTSTRAP = 2000
 RNG = np.random.default_rng(20260811)
 
-COLORS = {"siglip2": "#C44E52", "clip": "#4C72B0"}
-NAMES = {"siglip2": "SigLIP2", "clip": "CLIP"}
+COLORS = {"siglip2": "#C44E52", "clip": "#4C72B0",
+          "dinov2": "#55A868", "dinov3": "#8172B2"}
+NAMES = {"siglip2": "SigLIP2", "clip": "CLIP",
+         "dinov2": "DINOv2", "dinov3": "DINOv3"}
 
-RUN = re.compile(r"^(?P<enc>clip|siglip2)_lora_r16a32"
+RUN = re.compile(r"^(?P<enc>clip|siglip2|dinov2|dinov3)_lora_r16a32"
                  r"(?:_f(?P<frac>[\d.]+))?_s(?P<seed>\d+)_clahe$")
 
 
@@ -72,7 +74,7 @@ def collect():
 
 def frozen_baselines():
     out = {}
-    for encoder in ("clip", "siglip2"):
+    for encoder in NAMES:
         hits = sorted(RESULTS.glob(f"**/{encoder}-frozen/bootstrap/results.json"))
         if hits:
             out[encoder] = json.loads(
@@ -159,7 +161,9 @@ def main():
     report = {}
     fig, ax = plt.subplots(figsize=(7.2, 4.6))
 
-    for encoder in sorted(points, key=lambda e: e != "siglip2"):
+    order = list(NAMES)
+    for encoder in sorted(points, key=lambda e: order.index(e)
+                          if e in order else 99):
         by_n = points[encoder]
         sizes = sorted(by_n)
         means = np.array([np.mean(list(by_n[n].values())) for n in sizes])
@@ -187,9 +191,16 @@ def main():
         replicated = sum(1 for n in sizes if len(by_n[n]) > 1) >= len(sizes) - 1
 
         if popt is not None and len(sizes) >= 4 and replicated:
-            grid = np.logspace(np.log10(min(sizes)), np.log10(max(sizes) * 40), 300)
-            ax.plot(grid, saturating(grid, *popt), ls=":", lw=1.2, color=colour,
-                    alpha=0.85, zorder=2)
+            # Drawn only across the measured range. An earlier version ran the
+            # fitted curve out to 10^5 images, which draws the eye to exactly
+            # the extrapolation the identifiability check says is unsupported:
+            # a reader would take the visual convergence of those tails for a
+            # measurement of where each encoder ends up.
+            # The fit is not drawn. It is still computed, because the crossing
+            # point comes from it, but plotting it would put a smooth model on
+            # top of data the model demonstrably does not describe, and the
+            # asymptote it implies is the one thing this analysis declines to
+            # report. The measured points and their spread carry the figure.
             draws = bootstrap_asymptote(by_n)
             at_bound = float(np.mean(draws > 0.995)) if len(draws) else float("nan")
             entry["fit"] = {
@@ -212,17 +223,27 @@ def main():
                     bool(n_match is not None and n_match < min(sizes))
 
         if encoder in frozen:
-            ax.axhline(frozen[encoder], ls="--", lw=1.1, color=colour, alpha=0.7,
-                       zorder=1,
-                       label=f"{name} frozen, all {FT_TRAIN:,} images")
+            # Four separate legend entries for the frozen baselines pushed the
+            # legend over the data without saying anything the colours do not.
+            ax.axhline(frozen[encoder], ls="--", lw=1.0, color=colour, alpha=0.55,
+                       zorder=1)
             entry["frozen"] = frozen[encoder]
         report[encoder] = entry
 
     ax.set_xscale("log")
+    ticks = sorted({n for e in report for n in report[e]["n"]})
+    ax.set_xticks(ticks)
+    ax.set_xticklabels([f"{t:,}" for t in ticks])
+    ax.minorticks_off()
     ax.set_xlabel("Labelled images used for adaptation (log scale)")
     ax.set_ylabel("Accuracy")
     ax.grid(alpha=0.3)
-    ax.legend(fontsize=8, loc="lower right")
+
+    handles, labels = ax.get_legend_handles_labels()
+    handles.append(plt.Line2D([], [], ls="--", lw=1.0, color="#888888"))
+    labels.append(f"same encoder frozen, all {FT_TRAIN:,}")
+    ax.legend(handles, labels, fontsize=7.5, loc="lower right", frameon=True,
+              framealpha=0.92, ncols=2, columnspacing=1.0, handlelength=1.6)
     fig.tight_layout()
 
     FIGURES.mkdir(parents=True, exist_ok=True)
