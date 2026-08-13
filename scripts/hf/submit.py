@@ -74,7 +74,7 @@ def run_npz(encoder, run_name):
 
 
 def finetune(encoder, mode="lora", seed=42, rank=16, alpha=32, fraction=1.0,
-             image_size=None, extra=""):
+             image_size=None, augment="base", extra=""):
     cmd = (f"finetune_encoder.py --encoder {encoder} --mode {mode} --seed {seed} "
            f"--split-file {SPLIT}")
     if mode in ("lora", "lora+pool"):
@@ -83,11 +83,13 @@ def finetune(encoder, mode="lora", seed=42, rank=16, alpha=32, fraction=1.0,
         cmd += f" --train-fraction {fraction}"
     if image_size:
         cmd += f" --image-size {image_size}"
+    if augment != "base":
+        cmd += f" --augment {augment}"
     return cmd + (f" {extra}" if extra else "")
 
 
 def run_name_for(encoder, mode="lora", seed=42, rank=16, alpha=32, fraction=1.0,
-                 image_size=None):
+                 image_size=None, augment="base"):
     """Mirrors build_run_name() in finetune_encoder.py."""
     parts = [encoder, mode.replace("+", "-")]
     if mode in ("lora", "lora+pool"):
@@ -98,11 +100,13 @@ def run_name_for(encoder, mode="lora", seed=42, rank=16, alpha=32, fraction=1.0,
         parts.append(f"px{image_size}")
     parts.append(f"s{seed}")
     parts.append("clahe")
+    if augment != "base":
+        parts.append(f"aug{augment}")
     return "_".join(parts)
 
 
 def lora_chain(encoder, mode="lora", seed=42, rank=16, alpha=32, fraction=1.0,
-               image_size=None):
+               image_size=None, augment="base"):
     """Fine-tune, extract with the trained weights, then classify.
 
     One logical unit: the later steps are meaningless without the earlier ones,
@@ -116,12 +120,18 @@ def lora_chain(encoder, mode="lora", seed=42, rank=16, alpha=32, fraction=1.0,
     they were fitted to, which fails quietly rather than loudly: the shapes
     still match, because rotary embeddings do not care how many tokens arrive.
     """
-    name = run_name_for(encoder, mode, seed, rank, alpha, fraction, image_size)
+    name = run_name_for(encoder, mode, seed, rank, alpha, fraction, image_size,
+                        augment)
     weights = (f"--state-dict outputs/runs/{name}/encoder.pt" if mode == "full"
                else f"--adapter outputs/runs/{name}/adapter")
     px = f" --image-size {image_size}" if image_size else ""
+    # `augment` is deliberately absent from the extraction command. It is a
+    # training-time intervention, and the whole point is to score the resulting
+    # encoder on the same unaugmented images as every other condition. Passing
+    # it here would augment the test set as well and make the comparison
+    # meaningless.
     return [
-        finetune(encoder, mode, seed, rank, alpha, fraction, image_size),
+        finetune(encoder, mode, seed, rank, alpha, fraction, image_size, augment),
         f"extract_embeddings.py --encoder {encoder} {weights}{px}",
         classify(run_npz(encoder, name), name),
     ]
@@ -413,6 +423,29 @@ def build_batches():
                         f"Compare against the {px // 16}x{px // 16} token grid "
                         "of the 384px runs already in the paper.",
             }
+
+    # Experiment J: does varying the otoliths already held do what collecting
+    # more of them would not?
+    #
+    # The learning curves rule out more labelled data of the same kind, which
+    # is an argument for augmentation rather than against it: the plateau is on
+    # the label-count axis, and augmentation is off it. What it adds is
+    # variation the training set does not contain.
+    #
+    # One combined condition rather than a four-way screen. Each component is
+    # worth well under the 1.6-point seed spread on its own, so a screen would
+    # mostly resolve which condition drew the luckiest seeds, and the maximum
+    # of four noisy estimates is biased upward. A single pre-specified
+    # comparison against a baseline measured over twenty runs has both the
+    # largest expected effect and no multiplicity to correct for.
+    #
+    # SigLIP2, because that baseline is the best-measured quantity in the paper.
+    for seed in curve_seeds:
+        batches[f"augment-siglip2-s{seed}"] = {
+            "flavor": "l40sx1", "timeout": "110m",
+            "groups": [lora_chain("siglip2", seed=seed, augment="strong")],
+            "note": f"SigLIP2 LoRA with the combined augmentation, seed {seed}.",
+        }
 
     # Experiment I: everything that can be squeezed out downstream of the
     # encoder, which is all of it once the embeddings exist.

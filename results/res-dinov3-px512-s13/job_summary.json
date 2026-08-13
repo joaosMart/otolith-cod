@@ -1,0 +1,30 @@
+{
+  "commands": [
+    {
+      "command": "make_split.py",
+      "returncode": 0,
+      "minutes": 0.05,
+      "chain": 1
+    },
+    {
+      "command": "finetune_encoder.py --encoder dinov3 --mode lora --seed 13 --split-file outputs/splits/main_split.json --rank 16 --lora-alpha 32 --image-size 512",
+      "returncode": 0,
+      "minutes": 100.5,
+      "chain": 2
+    },
+    {
+      "command": "extract_embeddings.py --encoder dinov3 --adapter outputs/runs/dinov3_lora_r16a32_px512_s13_clahe/adapter --image-size 512",
+      "returncode": 0,
+      "minutes": 2.81,
+      "chain": 2
+    },
+    {
+      "command": "train_classifier.py --embeddings outputs/embeddings/dinov3_clahe_dinov3_lora_r16a32_px512_s13_clahe.npz --eval-mode bootstrap --split-file outputs/splits/main_split.json --output-dir outputs/results/dinov3_lora_r16a32_px512_s13_clahe/bootstrap",
+      "returncode": 0,
+      "minutes": 1.38,
+      "chain": 2
+    }
+  ],
+  "job_id": "6a7cf04073ce7897b8937ce3",
+  "accelerator": "gpu"
+}

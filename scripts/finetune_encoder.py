@@ -53,6 +53,8 @@ from coral_pytorch.losses import corn_loss
 from src.data import OtolithDataset, save_split_by_ids
 from src.data.splits import load_split_by_ids
 from src.features.preprocessing import (
+    AUGMENT_MODES,
+    DEFAULT_AUGMENT,
     DEFAULT_RESIZE_MODE,
     RESIZE_MODES,
     PreprocessConfig,
@@ -112,6 +114,11 @@ def parse_args():
     p.add_argument("--repeat-clahe", action=argparse.BooleanOptionalAction, default=False)
     p.add_argument("--resize-mode", default=DEFAULT_RESIZE_MODE, choices=RESIZE_MODES,
                    help="How a wide otolith crop is fitted to the square input.")
+    p.add_argument("--augment", default=DEFAULT_AUGMENT, choices=AUGMENT_MODES,
+                   help="Training-time augmentation. 'strong' adds crop-box "
+                        "jitter, an elastic deformation across the reading "
+                        "axis, per-image CLAHE parameters, an illumination "
+                        "field and random placement in the padded canvas.")
     p.add_argument("--image-size", type=int, default=None,
                    help="Override the encoder's input resolution. Only DINOv3 "
                         "accepts this, because rotary embeddings make the patch "
@@ -158,7 +165,7 @@ def build_run_name(args) -> str:
 
     slug = PreprocessConfig(
         apply_clahe=args.clahe, repeat_clahe=args.repeat_clahe,
-        resize_mode=args.resize_mode,
+        resize_mode=args.resize_mode, augment=args.augment,
     ).slug()
     if slug:
         parts.append(slug)
@@ -359,7 +366,7 @@ def main():
 
     preprocess = PreprocessConfig(
         apply_clahe=args.clahe, repeat_clahe=args.repeat_clahe,
-        resize_mode=args.resize_mode,
+        resize_mode=args.resize_mode, augment=args.augment,
     )
 
     print("=" * 68)

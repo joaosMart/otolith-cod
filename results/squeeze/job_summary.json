@@ -1,0 +1,60 @@
+{
+  "commands": [
+    {
+      "command": "make_split.py",
+      "returncode": 0,
+      "minutes": 0.05,
+      "chain": 1
+    },
+    {
+      "command": "extract_embeddings.py --encoder siglip2",
+      "returncode": 0,
+      "minutes": 1.34,
+      "chain": 2
+    },
+    {
+      "command": "extract_embeddings.py --encoder dinov3",
+      "returncode": 0,
+      "minutes": 1.16,
+      "chain": 2
+    },
+    {
+      "command": "extract_embeddings.py --encoder siglip2 --adapter outputs/runs/siglip2_lora_r16a32_s42_clahe/adapter",
+      "returncode": 0,
+      "minutes": 2.11,
+      "chain": 3
+    },
+    {
+      "command": "extract_embeddings.py --encoder siglip2 --adapter outputs/runs/siglip2_lora_r16a32_s7_clahe/adapter",
+      "returncode": 0,
+      "minutes": 2.12,
+      "chain": 4
+    },
+    {
+      "command": "extract_embeddings.py --encoder siglip2 --adapter outputs/runs/siglip2_lora_r16a32_s13_clahe/adapter",
+      "returncode": 0,
+      "minutes": 2.11,
+      "chain": 5
+    },
+    {
+      "command": "extract_embeddings.py --encoder dinov3 --adapter outputs/runs/dinov3_lora_r16a32_s42_clahe/adapter",
+      "returncode": 0,
+      "minutes": 1.63,
+      "chain": 6
+    },
+    {
+      "command": "extract_embeddings.py --encoder dinov2 --adapter outputs/runs/dinov2_lora_r16a32_s42_clahe/adapter",
+      "returncode": 0,
+      "minutes": 3.16,
+      "chain": 7
+    },
+    {
+      "command": "extract_embeddings.py --encoder clip --adapter outputs/runs/clip_lora_r16a32_s42_clahe/adapter",
+      "returncode": 0,
+      "minutes": 1.47,
+      "chain": 8
+    }
+  ],
+  "job_id": "6a7cf2c873ce7897b8937d1d",
+  "accelerator": "gpu"
+}
