@@ -60,6 +60,13 @@ def parse_args():
     p.add_argument("--clahe", action=argparse.BooleanOptionalAction, default=True)
     p.add_argument("--repeat-clahe", action=argparse.BooleanOptionalAction, default=False)
     p.add_argument("--resize-mode", default=DEFAULT_RESIZE_MODE, choices=RESIZE_MODES)
+    p.add_argument("--normalize", action=argparse.BooleanOptionalAction, default=True,
+                   help="L2-normalise each embedding. On by default, which is "
+                        "what the Ridge stage expects. Turn it off to reproduce "
+                        "what the CORN head saw during training: that head was "
+                        "deliberately fitted on un-normalised features so it "
+                        "could use embedding magnitude, so scoring it against "
+                        "normalised ones compares nothing.")
     p.add_argument("--image-size", type=int, default=None,
                    help="Override the encoder input resolution. Must match the "
                         "size the adapter was trained at, or the patch grid the "
@@ -97,6 +104,12 @@ def build_output_path(args, preprocess: PreprocessConfig) -> Path:
         parts.append(run)
     else:
         parts.append("frozen")
+    if not args.normalize:
+        # Must reach the filename. An un-normalised cache is not a drop-in for
+        # a normalised one, and silently overwriting the file the Ridge stage
+        # reads would be the worst possible failure: everything downstream
+        # would keep running and quietly score a different quantity.
+        parts.append("unnorm")
     if args.tag:
         parts.append(args.tag)
     if args.limit:
@@ -185,9 +198,9 @@ def main():
             images = images.to(device, non_blocking=True)
             if autocast_dtype is not None:
                 with torch.autocast(device_type="cuda", dtype=autocast_dtype):
-                    batch = embed_images(model, images, spec, normalize=True)
+                    batch = embed_images(model, images, spec, normalize=args.normalize)
             else:
-                batch = embed_images(model, images, spec, normalize=True)
+                batch = embed_images(model, images, spec, normalize=args.normalize)
             features.append(batch.float().cpu().numpy())
             labels.append(batch_labels.numpy())
 
@@ -220,7 +233,7 @@ def main():
                           "description": preprocess.describe()},
         "n_images": int(features.shape[0]),
         "feature_dim": int(features.shape[1]),
-        "normalized": True,
+        "normalized": args.normalize,
     }
     with open(output_path.with_suffix(".json"), "w") as fh:
         json.dump(provenance, fh, indent=2)

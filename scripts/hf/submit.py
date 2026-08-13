@@ -106,7 +106,7 @@ def run_name_for(encoder, mode="lora", seed=42, rank=16, alpha=32, fraction=1.0,
 
 
 def lora_chain(encoder, mode="lora", seed=42, rank=16, alpha=32, fraction=1.0,
-               image_size=None, augment="base"):
+               image_size=None, augment="base", extra=""):
     """Fine-tune, extract with the trained weights, then classify.
 
     One logical unit: the later steps are meaningless without the earlier ones,
@@ -131,7 +131,8 @@ def lora_chain(encoder, mode="lora", seed=42, rank=16, alpha=32, fraction=1.0,
     # it here would augment the test set as well and make the comparison
     # meaningless.
     return [
-        finetune(encoder, mode, seed, rank, alpha, fraction, image_size, augment),
+        finetune(encoder, mode, seed, rank, alpha, fraction, image_size, augment,
+                 extra=extra),
         f"extract_embeddings.py --encoder {encoder} {weights}{px}",
         classify(run_npz(encoder, name), name),
     ]
@@ -440,12 +441,42 @@ def build_batches():
     # largest expected effect and no multiplicity to correct for.
     #
     # SigLIP2, because that baseline is the best-measured quantity in the paper.
+    # On the 80 GB card, and with more dataloader workers, because the first
+    # attempt on l40sx1 lost two of three seeds to the wall clock. Not because
+    # augmentation is slow per epoch, which it barely is: it is because the
+    # augmented model keeps improving for far longer, so early stopping fires
+    # much later. Seed 13 converged at epoch 8 and finished in 50 minutes;
+    # seed 42 was still gaining validation accuracy at epoch 26 and was killed
+    # at 110. Thirty epochs at the measured four minutes each does not fit on
+    # the slower card, and nothing survives much past 1h43m there regardless of
+    # the timeout requested.
+    #
+    # That divergence is itself a result worth keeping: it says the
+    # unaugmented runs were stopping early because they had started
+    # overfitting, not because they had run out of things to learn.
     for seed in curve_seeds:
         batches[f"augment-siglip2-s{seed}"] = {
-            "flavor": "l40sx1", "timeout": "110m",
-            "groups": [lora_chain("siglip2", seed=seed, augment="strong")],
+            "flavor": "a100-large", "timeout": "110m",
+            "groups": [lora_chain("siglip2", seed=seed, augment="strong",
+                                  extra="--num-workers 8")],
             "note": f"SigLIP2 LoRA with the combined augmentation, seed {seed}.",
         }
+
+    # The ordinal head was trained on un-normalised embeddings on purpose, so
+    # that it could use their magnitude, while extraction normalises. Scoring
+    # the head against the normalised cache therefore compares nothing, and it
+    # does so silently rather than crashing. This produces the cache that makes
+    # the missing baseline computable.
+    batches["squeeze-unnorm"] = {
+        "flavor": "l40sx1", "timeout": "45m",
+        "groups": [[extract("siglip2",
+                            adapter=f"outputs/runs/{run_name_for('siglip2', seed=s)}/adapter",
+                            ) + " --no-normalize"] for s in curve_seeds],
+        "needs_previous": True,
+        "keep_embeddings": True,
+        "note": "Un-normalised SigLIP2 embeddings, so the discarded CORN head "
+                "can be scored on the vectors it was actually fitted on.",
+    }
 
     # Experiment I: everything that can be squeezed out downstream of the
     # encoder, which is all of it once the embeddings exist.
