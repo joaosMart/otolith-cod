@@ -478,6 +478,35 @@ def build_batches():
                 "can be scored on the vectors it was actually fitted on.",
     }
 
+    # Do the two things that worked add up?
+    #
+    # Augmentation acts during training and encoder pairing acts at readout, so
+    # there is no mechanism forcing them to overlap, but nothing guarantees they
+    # do not either: both could be buying the same robustness by different
+    # routes, in which case the pair is worth less than the sum. The augmented
+    # runs discarded their embeddings, so this re-extracts them; the arithmetic
+    # afterwards is local and free.
+    # DINOv3 at all three seeds as well, not just 42. With one DINOv3 adapter
+    # the three concatenation results varied only the SigLIP2 seed, so they
+    # were three looks at one pairing rather than three independent pairings,
+    # and "positive at three of three seeds" claimed more than it had. These
+    # adapters already existed from the learning-curve batches; only their
+    # embeddings were never kept.
+    batches["augment-embeddings"] = {
+        "flavor": "l40sx1", "timeout": "60m",
+        "groups": ([[extract("siglip2",
+                             adapter=f"outputs/runs/{run_name_for('siglip2', seed=s, augment='strong')}/adapter")]
+                    for s in curve_seeds]
+                   + [[extract("dinov3",
+                               adapter=f"outputs/runs/{run_name_for('dinov3', seed=s)}/adapter")]
+                      for s in curve_seeds if s != 42]),
+        "needs_previous": True,
+        "keep_embeddings": True,
+        "note": "Embeddings from the augmented SigLIP2 adapters and from DINOv3 "
+                "at seeds 7 and 13, so augmentation and encoder pairing can be "
+                "combined and the pairing can be seed-matched.",
+    }
+
     # Experiment I: everything that can be squeezed out downstream of the
     # encoder, which is all of it once the embeddings exist.
     #

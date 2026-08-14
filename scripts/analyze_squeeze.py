@@ -192,7 +192,8 @@ def main():
     split = None
     report = {}
     per_seed = {k: [] for k in ("baseline", "corn", "stack", "concat",
-                                "concat_same_encoder",
+                                "concat_same_encoder", "augment",
+                                "augment_concat",
                                 "cutpoints_f1", "cutpoints_acc")}
 
     for seed in SEEDS:
@@ -216,7 +217,18 @@ def main():
         # --- two encoders side by side. DINOv3 is self-distilled where SigLIP2
         # is contrastive vision-language, so their errors should be partly
         # decorrelated and the pair should beat either alone.
-        other = EMB / "dinov3_clahe_dinov3_lora_r16a32_s42_clahe.npz"
+        #
+        # Seed-matched. An earlier version paired every SigLIP2 seed with the
+        # single DINOv3 seed-42 adapter, which made "positive at three of three
+        # seeds" mean three looks at one pairing rather than three independent
+        # pairings. Falls back to seed 42 only if the matching adapter is
+        # genuinely absent, and says so, rather than silently substituting.
+        other = EMB / f"dinov3_clahe_dinov3_lora_r16a32_s{seed}_clahe.npz"
+        if not other.exists():
+            other = EMB / "dinov3_clahe_dinov3_lora_r16a32_s42_clahe.npz"
+            if other.exists():
+                print(f"  note: no DINOv3 adapter at seed {seed}; pairing with "
+                      "seed 42, so this pair is not seed-matched")
         if other.exists():
             d = np.load(other, allow_pickle=True)
             assert np.array_equal(d["measurement_ids"], ids), \
@@ -239,6 +251,25 @@ def main():
             per_seed["concat_same_encoder"].append(
                 score(y_test, fit_predict(np.hstack([features, t["features"]]),
                                           labels, train, test)))
+
+        # --- the two interventions that worked, separately and together.
+        # Augmentation acts during training and encoder pairing acts at
+        # readout, so nothing forces them to overlap, but nothing rules it out
+        # either: both could be buying the same robustness by different routes.
+        # The additivity check below is the only way to tell.
+        aug_path = EMB / f"siglip2_clahe_siglip2_lora_r16a32_s{seed}_clahe_augstrong.npz"
+        if aug_path.exists():
+            a = np.load(aug_path, allow_pickle=True)
+            assert np.array_equal(a["measurement_ids"], ids)
+            aug_features = augment_embeddings(a["features"], a["measurement_ids"],
+                                              METADATA, TABULAR)
+            per_seed["augment"].append(
+                score(y_test, fit_predict(aug_features, labels, train, test)))
+            if other.exists():
+                both = np.hstack([aug_features,
+                                  np.load(other, allow_pickle=True)["features"]])
+                per_seed["augment_concat"].append(
+                    score(y_test, fit_predict(both, labels, train, test)))
 
         # --- cut-points, fitted on held-out training data only.
         # Both objectives are reported because they genuinely disagree: moving
@@ -293,6 +324,18 @@ def main():
               + f"   mean {np.mean(deltas):+5.2f}   {agree}/{len(deltas)} positive")
         report[name]["paired_deltas_pp"] = deltas
         report[name]["seeds_favouring"] = agree
+
+    if per_seed["augment"] and per_seed["augment_concat"]:
+        def mean_delta(name):
+            return float(np.mean([100 * (r["accuracy"] - b["accuracy"])
+                                  for r, b in zip(per_seed[name], per_seed["baseline"])]))
+        a, c, both = mean_delta("augment"), mean_delta("concat"), mean_delta("augment_concat")
+        print(f"\nAdditivity: augmentation {a:+.2f} + pairing {c:+.2f} = {a + c:+.2f} "
+              f"expected, {both:+.2f} measured "
+              f"({100 * both / (a + c):.0f}% of the sum retained)")
+        report["additivity"] = {"augment_pp": a, "concat_pp": c,
+                                "expected_sum_pp": a + c, "measured_pp": both,
+                                "retained_fraction": both / (a + c) if a + c else None}
 
     SUMMARY.parent.mkdir(parents=True, exist_ok=True)
     SUMMARY.write_text(json.dumps(report, indent=2, default=float))
