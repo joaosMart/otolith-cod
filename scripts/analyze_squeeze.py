@@ -32,6 +32,7 @@ the test set.
 """
 
 import json
+import os
 import sys
 import warnings
 from pathlib import Path
@@ -57,7 +58,11 @@ from src.features.metadata import augment_embeddings
 # are silenced here so a real warning would be visible.
 warnings.filterwarnings("ignore", category=RuntimeWarning, module="sklearn")
 
-EMB = Path("outputs/embeddings")
+# Overridable so the uniform-hardware caches can be scored without disturbing
+# the mixed-hardware ones they replace. Extraction is bit-reproducible within a
+# GPU model and not across them, so which directory this points at is part of
+# the experimental condition rather than a path detail.
+EMB = Path(os.environ.get("OTOLITH_EMBEDDINGS", "outputs/embeddings"))
 SPLIT = Path("outputs/splits/main_split.json")
 METADATA = "cod_otolith_age_final_with_scale.csv"
 SUMMARY = Path("outputs/squeeze.json")

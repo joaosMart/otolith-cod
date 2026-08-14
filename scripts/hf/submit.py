@@ -41,7 +41,7 @@ SEEDS = [42, 7, 13, 101, 2024]
 SPLIT = "outputs/splits/main_split.json"
 
 
-def extract(encoder, adapter=None, resize="pad", tag=None):
+def extract(encoder, adapter=None, resize="pad", tag=None, force=False):
     cmd = f"extract_embeddings.py --encoder {encoder}"
     if adapter:
         cmd += f" --adapter {adapter}"
@@ -49,6 +49,13 @@ def extract(encoder, adapter=None, resize="pad", tag=None):
         cmd += f" --resize-mode {resize}"
     if tag:
         cmd += f" --tag {tag}"
+    if force:
+        # Needed whenever a batch runs with --seed-outputs and intends to
+        # re-extract. Without it the seeded cache from an earlier batch is
+        # found and the extraction skipped, which for a batch whose whole
+        # purpose is redoing extraction on one flavor would silently deliver
+        # exactly the mixed-hardware caches it exists to replace.
+        cmd += " --force"
     return cmd
 
 
@@ -505,6 +512,47 @@ def build_batches():
         "note": "Embeddings from the augmented SigLIP2 adapters and from DINOv3 "
                 "at seeds 7 and 13, so augmentation and encoder pairing can be "
                 "combined and the pairing can be seed-matched.",
+    }
+
+    # Every embedding the squeeze analysis needs, extracted in ONE job on ONE
+    # flavor.
+    #
+    # Extraction turns out to be exactly reproducible within a GPU type and not
+    # across them: the same three baseline adapters were extracted in seven
+    # separate l40sx1 batches and returned identical accuracies and identical
+    # selected alphas, while the augmented adapters moved by 0.31 to 0.70
+    # points between a100-large, l40sx1 and a10g-small. That is four to nine
+    # test images out of 1,293 changing side when the continuous ridge output
+    # is rounded to an integer age. Small, and the same size as the effects
+    # being claimed, which is what makes it a problem rather than a curiosity.
+    #
+    # `--tag l40s` on one adapter that already has an a100-large extraction is
+    # the controlled test the evidence so far lacks: every comparison behind
+    # the observation above involved a different adapter as well as a different
+    # card, so hardware and adapter were confounded. Here only the card varies.
+    # It bears on Section 3.8, where the full fine-tuning curve ran on
+    # a100-large and the LoRA curve it is compared against ran on l40sx1.
+    # The controlled test comes free with this batch rather than needing its
+    # own chain: the augmented adapters already have a100-large extractions
+    # from the runs that produced them, so re-extracting them here on l40sx1
+    # varies the card while holding the adapter fixed, which is exactly the
+    # comparison the earlier evidence could not make.
+    def _e(encoder, run=None):
+        adapter = f"outputs/runs/{run}/adapter" if run else None
+        return [extract(encoder, adapter=adapter, force=True)]
+
+    batches["squeeze-uniform"] = {
+        "flavor": "l40sx1", "timeout": "90m",
+        "groups": ([_e("siglip2"), _e("dinov3")]
+                   + [_e("siglip2", run_name_for("siglip2", seed=s)) for s in curve_seeds]
+                   + [_e("siglip2", run_name_for("siglip2", seed=s, augment="strong"))
+                      for s in curve_seeds]
+                   + [_e("dinov3", run_name_for("dinov3", seed=s)) for s in curve_seeds]),
+        "needs_previous": True,
+        "keep_embeddings": True,
+        "note": "Every squeeze embedding on one flavor, so no comparison "
+                "straddles two GPU types. Re-extracting the augmented adapters "
+                "here also isolates the hardware effect from the adapter.",
     }
 
     # Experiment I: everything that can be squeezed out downstream of the
