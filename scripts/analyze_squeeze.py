@@ -122,7 +122,7 @@ def corn_logits(run_name):
     the attribution comparison interpretable.
     """
     head = Path("outputs/runs") / run_name / "corn_head.pt"
-    cache = EMB / f"siglip2_clahe_unnorm_{run_name}.npz"
+    cache = EMB / f"siglip2_clahe_{run_name}_unnorm.npz"
     if not head.exists() or not cache.exists():
         return None
     features = np.load(cache, allow_pickle=True)["features"]

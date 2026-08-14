@@ -1,0 +1,83 @@
+{
+  "eval_mode": "bootstrap",
+  "timestamp": "20260811_181116",
+  "config": {
+    "embeddings_path": "outputs/embeddings/clip_clahe_clip_lora_r16a32_s13_clahe.npz",
+    "feature_key": "features",
+    "add_tabular": true,
+    "tabular_columns": [
+      "length",
+      "month_sin",
+      "month_cos",
+      "shot_latitude",
+      "shot_longitude",
+      "is_survey",
+      "seg_width_px",
+      "seg_height_px",
+      "seg_aspect_ratio"
+    ],
+    "n_experiments": 1,
+    "train_ratio": 0.85,
+    "test_ratio": 0.15,
+    "alpha_log_min": 1.5,
+    "alpha_log_max": 3,
+    "alpha_steps": 30,
+    "cv_folds": 5,
+    "split_file": "outputs/splits/main_split.json"
+  },
+  "experiment_results": [
+    {
+      "best_alpha": 269.7953640072999,
+      "best_cv_score": 0.9081358671188354,
+      "train_size": 7326,
+      "test_size": 1293,
+      "test_metrics": {
+        "accuracy": 0.6357308584686775,
+        "accuracy_pm1": 0.9675174013921114,
+        "precision": 0.6924633160379741,
+        "recall": 0.6508252249085706,
+        "f1": 0.6658292781722734,
+        "rmse": 0.6996850468126203,
+        "rmse_raw": 0.6404827006398802
+      },
+      "experiment": 0
+    }
+  ],
+  "aggregated_results": {
+    "accuracy": {
+      "mean": 0.6357308584686775,
+      "ci_lower": 0.6094354215003867,
+      "ci_upper": 0.6604988399071926
+    },
+    "accuracy_pm1": {
+      "mean": 0.9675174013921114,
+      "ci_lower": 0.9582366589327146,
+      "ci_upper": 0.9767981438515081
+    },
+    "precision": {
+      "mean": 0.6924633160379741,
+      "ci_lower": 0.6575638874810517,
+      "ci_upper": 0.7236942040086514
+    },
+    "recall": {
+      "mean": 0.6508252249085706,
+      "ci_lower": 0.6130835525074734,
+      "ci_upper": 0.684333392382619
+    },
+    "f1": {
+      "mean": 0.6658292781722734,
+      "ci_lower": 0.6291069877789416,
+      "ci_upper": 0.6963528789627058
+    },
+    "rmse": {
+      "mean": 0.6996850468126203,
+      "ci_lower": 0.6569280967974722,
+      "ci_upper": 0.7420629258521189
+    }
+  },
+  "bootstrap": {
+    "n_bootstrap": 1000,
+    "ci_level": 0.95,
+    "seed": 42
+  }
+}
