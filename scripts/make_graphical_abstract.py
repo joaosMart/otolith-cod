@@ -38,7 +38,7 @@ OTOLITHS = [(2, Path("../otolith_data/otoliths_v1/2/23254826.jpg")),
 ENCODERS = ["clip", "siglip2", "dinov2", "dinov3"]
 LABELS = {"clip": "CLIP", "siglip2": "SigLIP2", "dinov2": "DINOv2", "dinov3": "DINOv3"}
 
-FROZEN, LORA = "#4C72B0", "#C44E52"
+FROZEN, LORA, TUNED = "#4C72B0", "#C44E52", "#3F7D58"
 INK, MUTED = "#22252A", "#6B7280"
 
 
@@ -52,6 +52,21 @@ def _find(pattern):
 def accuracy(run):
     path = _find(f"**/{run}/bootstrap/results.json")
     return json.loads(path.read_text())["aggregated_results"]["accuracy"]["mean"]
+
+
+def tuned():
+    """The best configuration from the squeeze experiments, or None.
+
+    Read from the analysis output rather than typed in, on the same principle
+    as every other number in this figure. Returns the mean over the three
+    seeds, not the best of them: the seed-42 value is a point and a half
+    higher, and putting that on a graphical abstract would be picking the
+    luckiest run to advertise.
+    """
+    path = Path("outputs/squeeze.json")
+    if not path.exists():
+        return None
+    return json.loads(path.read_text())["augment_concat"]["accuracy"]
 
 
 def forward_selection(run):
@@ -111,7 +126,7 @@ def panel_otolith(axes):
                        color=MUTED, labelpad=3)
 
 
-def panel_gain(ax, frozen, lora):
+def panel_gain(ax, frozen, lora, best=None):
     """Slope chart: every encoder makes the same large move."""
     for encoder in ENCODERS:
         ax.plot([0, 1], [frozen[encoder], lora[encoder]], "-o",
@@ -143,8 +158,19 @@ def panel_gain(ax, frozen, lora):
             f"{100 * (hi_f - lo_f):.1f} pp\nchoosing", fontsize=6.4,
             color=FROZEN, va="center", ha="right", linespacing=1.2)
 
+    # Drawn as a rule above the two columns rather than as a third column: the
+    # panel is four centimetres wide and a third x position would collide with
+    # the encoder labels. A rule also reads correctly, since this configuration
+    # is one encoder pair rather than a fourth measurement of all four.
+    if best is not None:
+        ax.plot([-0.12, 1.10], [best, best], linestyle=(0, (3, 2)),
+                color=TUNED, linewidth=0.9, zorder=3, clip_on=False)
+        ax.text(-0.12, best + 0.0035,
+                f"{best:.3f}  augmentation + second encoder",
+                fontsize=5.4, color=TUNED, va="bottom", ha="left")
+
     ax.set_xlim(-0.5, 1.12)
-    ax.set_ylim(0.552, 0.678)
+    ax.set_ylim(0.552, 0.694)
     ax.set_xticks([0, 1])
     ax.set_xticklabels(["frozen", "LoRA"], fontsize=6.8, color=INK)
     ax.set_ylabel("accuracy", fontsize=6.8, color=INK, labelpad=2)
@@ -218,7 +244,7 @@ def main():
     stack = grid[0].subgridspec(2, 1, hspace=0.12)
 
     panel_otolith([fig.add_subplot(stack[0]), fig.add_subplot(stack[1])])
-    panel_gain(fig.add_subplot(grid[1]), frozen, lora)
+    panel_gain(fig.add_subplot(grid[1]), frozen, lora, best=tuned())
     panel_absorption(fig.add_subplot(grid[2]), fs_frozen, fs_lora)
 
     OUT.parent.mkdir(parents=True, exist_ok=True)
