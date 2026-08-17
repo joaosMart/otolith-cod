@@ -1,0 +1,30 @@
+{
+  "commands": [
+    {
+      "command": "make_split.py",
+      "returncode": 0,
+      "minutes": 0.05,
+      "chain": 1
+    },
+    {
+      "command": "finetune_encoder.py --encoder clip --mode lora --seed 42 --split-file outputs/splits/main_split.json --rank 16 --lora-alpha 32 --train-fraction 0.5",
+      "returncode": 0,
+      "minutes": 24.33,
+      "chain": 2
+    },
+    {
+      "command": "extract_embeddings.py --encoder clip --adapter outputs/runs/clip_lora_r16a32_f0.5_s42_clahe/adapter",
+      "returncode": 0,
+      "minutes": 1.41,
+      "chain": 2
+    },
+    {
+      "command": "train_classifier.py --embeddings outputs/embeddings/clip_clahe_clip_lora_r16a32_f0.5_s42_clahe.npz --eval-mode bootstrap --split-file outputs/splits/main_split.json --output-dir outputs/results/clip_lora_r16a32_f0.5_s42_clahe/bootstrap",
+      "returncode": 0,
+      "minutes": 1.32,
+      "chain": 2
+    }
+  ],
+  "job_id": "6a78f3b7da2af92a634f0990",
+  "accelerator": "gpu"
+}

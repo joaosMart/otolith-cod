@@ -343,7 +343,12 @@ def plot_shap_dependence_month_impact(
     non_empty = [(m, d) for m, d in zip(month_labels, box_data) if len(d) > 0]
     if non_empty:
         labels, data = zip(*non_empty)
-        ax.boxplot(data, labels=labels, showfliers=False)
+        # matplotlib 3.9 renamed this keyword from `labels` to `tick_labels`.
+        # Accept either, so the analysis is not tied to one matplotlib release.
+        try:
+            ax.boxplot(data, tick_labels=labels, showfliers=False)
+        except TypeError:
+            ax.boxplot(data, labels=labels, showfliers=False)
         rng = np.random.RandomState(42)
         for i, (m, d) in enumerate(non_empty):
             jitter = rng.uniform(-0.15, 0.15, size=len(d))

@@ -1,0 +1,21 @@
+{
+  "commands": [
+    {
+      "command": "make_split.py",
+      "returncode": 0,
+      "minutes": 0.08
+    },
+    {
+      "command": "extract_embeddings.py --encoder siglip2",
+      "returncode": 0,
+      "minutes": 1.38
+    },
+    {
+      "command": "finetune_encoder.py --encoder siglip2 --mode lora --seed 42 --split-file outputs/splits/main_split.json --rank 16 --lora-alpha 32 --epochs 2 --patience 99 --run-name calib",
+      "returncode": 0,
+      "minutes": 7.75
+    }
+  ],
+  "job_id": "6a787950da2af92a634f024b",
+  "accelerator": "gpu"
+}

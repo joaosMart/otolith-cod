@@ -1,0 +1,66 @@
+{
+  "commands": [
+    {
+      "command": "make_split.py",
+      "returncode": 0,
+      "minutes": 0.05,
+      "chain": 1
+    },
+    {
+      "command": "finetune_encoder.py --encoder dinov3 --mode lora --seed 42 --split-file outputs/splits/main_split.json --rank 16 --lora-alpha 32 --train-fraction 0.25",
+      "returncode": 0,
+      "minutes": 23.3,
+      "chain": 2
+    },
+    {
+      "command": "extract_embeddings.py --encoder dinov3 --adapter outputs/runs/dinov3_lora_r16a32_f0.25_s42_clahe/adapter",
+      "returncode": 0,
+      "minutes": 1.62,
+      "chain": 2
+    },
+    {
+      "command": "train_classifier.py --embeddings outputs/embeddings/dinov3_clahe_dinov3_lora_r16a32_f0.25_s42_clahe.npz --eval-mode bootstrap --split-file outputs/splits/main_split.json --output-dir outputs/results/dinov3_lora_r16a32_f0.25_s42_clahe/bootstrap",
+      "returncode": 0,
+      "minutes": 1.34,
+      "chain": 2
+    },
+    {
+      "command": "finetune_encoder.py --encoder dinov3 --mode lora --seed 7 --split-file outputs/splits/main_split.json --rank 16 --lora-alpha 32 --train-fraction 0.25",
+      "returncode": 0,
+      "minutes": 8.12,
+      "chain": 3
+    },
+    {
+      "command": "extract_embeddings.py --encoder dinov3 --adapter outputs/runs/dinov3_lora_r16a32_f0.25_s7_clahe/adapter",
+      "returncode": 0,
+      "minutes": 1.62,
+      "chain": 3
+    },
+    {
+      "command": "train_classifier.py --embeddings outputs/embeddings/dinov3_clahe_dinov3_lora_r16a32_f0.25_s7_clahe.npz --eval-mode bootstrap --split-file outputs/splits/main_split.json --output-dir outputs/results/dinov3_lora_r16a32_f0.25_s7_clahe/bootstrap",
+      "returncode": 0,
+      "minutes": 1.29,
+      "chain": 3
+    },
+    {
+      "command": "finetune_encoder.py --encoder dinov3 --mode lora --seed 13 --split-file outputs/splits/main_split.json --rank 16 --lora-alpha 32 --train-fraction 0.25",
+      "returncode": 0,
+      "minutes": 19.27,
+      "chain": 4
+    },
+    {
+      "command": "extract_embeddings.py --encoder dinov3 --adapter outputs/runs/dinov3_lora_r16a32_f0.25_s13_clahe/adapter",
+      "returncode": 0,
+      "minutes": 1.63,
+      "chain": 4
+    },
+    {
+      "command": "train_classifier.py --embeddings outputs/embeddings/dinov3_clahe_dinov3_lora_r16a32_f0.25_s13_clahe.npz --eval-mode bootstrap --split-file outputs/splits/main_split.json --output-dir outputs/results/dinov3_lora_r16a32_f0.25_s13_clahe/bootstrap",
+      "returncode": 0,
+      "minutes": 1.33,
+      "chain": 4
+    }
+  ],
+  "job_id": "6a7b697c27caad61c6eac2dd",
+  "accelerator": "gpu"
+}

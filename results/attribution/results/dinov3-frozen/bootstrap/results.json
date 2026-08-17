@@ -1,0 +1,83 @@
+{
+  "eval_mode": "bootstrap",
+  "timestamp": "20260809_164053",
+  "config": {
+    "embeddings_path": "outputs/embeddings/dinov3_clahe_frozen.npz",
+    "feature_key": "features",
+    "add_tabular": true,
+    "tabular_columns": [
+      "length",
+      "month_sin",
+      "month_cos",
+      "shot_latitude",
+      "shot_longitude",
+      "is_survey",
+      "seg_width_px",
+      "seg_height_px",
+      "seg_aspect_ratio"
+    ],
+    "n_experiments": 1,
+    "train_ratio": 0.85,
+    "test_ratio": 0.15,
+    "alpha_log_min": 1.5,
+    "alpha_log_max": 3,
+    "alpha_steps": 30,
+    "cv_folds": 5,
+    "split_file": "outputs/splits/main_split.json"
+  },
+  "experiment_results": [
+    {
+      "best_alpha": 239.5026619987486,
+      "best_cv_score": 0.8685043454170227,
+      "train_size": 7326,
+      "test_size": 1293,
+      "test_metrics": {
+        "accuracy": 0.5815931941221965,
+        "accuracy_pm1": 0.9729311678267595,
+        "precision": 0.6387019765768899,
+        "recall": 0.5948521596435058,
+        "f1": 0.6086290078646187,
+        "rmse": 0.7187683889170552,
+        "rmse_raw": 0.6826163798096863
+      },
+      "experiment": 0
+    }
+  ],
+  "aggregated_results": {
+    "accuracy": {
+      "mean": 0.5815931941221965,
+      "ci_lower": 0.5560711523588554,
+      "ci_upper": 0.6094354215003867
+    },
+    "accuracy_pm1": {
+      "mean": 0.9729311678267595,
+      "ci_lower": 0.9644238205723125,
+      "ci_upper": 0.9814385150812065
+    },
+    "precision": {
+      "mean": 0.6387019765768899,
+      "ci_lower": 0.6024589435317906,
+      "ci_upper": 0.6761139844494403
+    },
+    "recall": {
+      "mean": 0.5948521596435058,
+      "ci_lower": 0.5613523386613212,
+      "ci_upper": 0.6300573496943177
+    },
+    "f1": {
+      "mean": 0.6086290078646187,
+      "ci_lower": 0.5725237159505402,
+      "ci_upper": 0.6416334554880135
+    },
+    "rmse": {
+      "mean": 0.7187683889170552,
+      "ci_lower": 0.6851648629377354,
+      "ci_upper": 0.7534401638040683
+    }
+  },
+  "bootstrap": {
+    "n_bootstrap": 1000,
+    "ci_level": 0.95,
+    "seed": 42
+  }
+}

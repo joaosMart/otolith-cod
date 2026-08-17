@@ -1,0 +1,108 @@
+{
+  "run_name": "calib",
+  "args": {
+    "encoder": "siglip2",
+    "mode": "lora",
+    "config": "configs/config.yaml",
+    "epochs": 2,
+    "batch_size": 32,
+    "lr": null,
+    "head_lr_multiplier": 10.0,
+    "weight_decay": 0.01,
+    "warmup_epochs": 3,
+    "patience": 99,
+    "rank": 16,
+    "lora_alpha": 32,
+    "lora_dropout": 0.2,
+    "seed": 42,
+    "val_ratio": 0.2,
+    "train_fraction": 1.0,
+    "clahe": true,
+    "repeat_clahe": false,
+    "resize_mode": "pad",
+    "split_file": "outputs/splits/main_split.json",
+    "output_dir": null,
+    "run_name": "calib",
+    "amp": true,
+    "grad_checkpointing": false,
+    "num_workers": 4,
+    "deterministic": true
+  },
+  "resolved_lr": 0.0001,
+  "encoder": {
+    "name": "siglip2",
+    "model_id": "google/siglip2-so400m-patch14-384",
+    "embedding_dim": 1152,
+    "image_size": 384
+  },
+  "mode": "lora",
+  "strategy": {
+    "strategy": "LoRA r=16 alpha=32 on ['q_proj', 'k_proj', 'v_proj', 'fc1', 'fc2']",
+    "modules_to_save": []
+  },
+  "preprocessing": {
+    "apply_clahe": true,
+    "repeat_clahe": false,
+    "clip_limit": 3.0,
+    "tile_size": 25,
+    "resize_mode": "pad",
+    "description": "CLAHE applied once, clip limit 3, adaptive tile grid at 25px, aspect-preserving pad to square",
+    "slug": "clahe"
+  },
+  "parameters": {
+    "total": 436100160,
+    "trainable": 7874560,
+    "lora": 7874560,
+    "full_rank_trainable": 0,
+    "trainable_pct": 1.8056769343996573,
+    "lora_pct": 1.8056769343996573
+  },
+  "loss": "corn",
+  "best_epoch": 2,
+  "best_val_metrics": {
+    "acc": 0.48703956604003906,
+    "mae": 0.6105048060417175,
+    "within_1": 0.9249659180641174,
+    "loss": 0.19965197652131117
+  },
+  "elapsed_minutes": 7.59,
+  "sizes": {
+    "ft_train": 5860,
+    "ft_val": 1466,
+    "test": 1293
+  },
+  "history": {
+    "train_loss": [
+      0.3912623661675144,
+      0.20706437177218676
+    ],
+    "train_acc": [
+      0.19726961851119995,
+      0.4655289947986603
+    ],
+    "train_mae": [
+      2.1228668689727783,
+      0.6341297030448914
+    ],
+    "train_within_1": [
+      0.49624571204185486,
+      0.917747437953949
+    ],
+    "val_loss": [
+      0.26729524601123833,
+      0.19965197652131117
+    ],
+    "val_acc": [
+      0.2953615188598633,
+      0.48703956604003906
+    ],
+    "val_mae": [
+      0.9474761486053467,
+      0.6105048060417175
+    ],
+    "val_within_1": [
+      0.7919508814811707,
+      0.9249659180641174
+    ]
+  }
+}

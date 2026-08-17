@@ -1,0 +1,30 @@
+{
+  "commands": [
+    {
+      "command": "make_split.py",
+      "returncode": 0,
+      "minutes": 0.05,
+      "chain": 1
+    },
+    {
+      "command": "extract_embeddings.py --encoder siglip2 --adapter outputs/runs/siglip2_lora_r16a32_s42_clahe/adapter --no-normalize",
+      "returncode": 0,
+      "minutes": 2.22,
+      "chain": 2
+    },
+    {
+      "command": "extract_embeddings.py --encoder siglip2 --adapter outputs/runs/siglip2_lora_r16a32_s7_clahe/adapter --no-normalize",
+      "returncode": 0,
+      "minutes": 2.1,
+      "chain": 3
+    },
+    {
+      "command": "extract_embeddings.py --encoder siglip2 --adapter outputs/runs/siglip2_lora_r16a32_s13_clahe/adapter --no-normalize",
+      "returncode": 0,
+      "minutes": 2.11,
+      "chain": 4
+    }
+  ],
+  "job_id": "6a7e29ef73ce7897b893999a",
+  "accelerator": "gpu"
+}

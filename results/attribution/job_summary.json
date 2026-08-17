@@ -1,0 +1,48 @@
+{
+  "commands": [
+    {
+      "command": "make_split.py",
+      "returncode": 0,
+      "minutes": 0.04,
+      "chain": 1
+    },
+    {
+      "command": "extract_embeddings.py --encoder siglip2",
+      "returncode": 0,
+      "minutes": 1.34,
+      "chain": 2
+    },
+    {
+      "command": "train_classifier.py --embeddings outputs/embeddings/siglip2_clahe_frozen.npz --eval-mode bootstrap --split-file outputs/splits/main_split.json --output-dir outputs/results/siglip2-frozen/bootstrap",
+      "returncode": 0,
+      "minutes": 1.34,
+      "chain": 2
+    },
+    {
+      "command": "analyze_feature_importance.py --embeddings outputs/embeddings/siglip2_clahe_frozen.npz --results outputs/results/siglip2-frozen/bootstrap/results.json --output-dir outputs/results/siglip2-frozen/bootstrap/feature_importance --split-file outputs/splits/main_split.json",
+      "returncode": 0,
+      "minutes": 5.99,
+      "chain": 2
+    },
+    {
+      "command": "extract_embeddings.py --encoder siglip2 --adapter outputs/runs/siglip2_lora_r16a32_s42_clahe/adapter",
+      "returncode": 0,
+      "minutes": 2.12,
+      "chain": 3
+    },
+    {
+      "command": "train_classifier.py --embeddings outputs/embeddings/siglip2_clahe_siglip2_lora_r16a32_s42_clahe.npz --eval-mode bootstrap --split-file outputs/splits/main_split.json --output-dir outputs/results/siglip2_lora_r16a32_s42_clahe/bootstrap",
+      "returncode": 0,
+      "minutes": 1.39,
+      "chain": 3
+    },
+    {
+      "command": "analyze_feature_importance.py --embeddings outputs/embeddings/siglip2_clahe_siglip2_lora_r16a32_s42_clahe.npz --results outputs/results/siglip2_lora_r16a32_s42_clahe/bootstrap/results.json --output-dir outputs/results/siglip2_lora_r16a32_s42_clahe/bootstrap/feature_importance --split-file outputs/splits/main_split.json",
+      "returncode": 0,
+      "minutes": 5.96,
+      "chain": 3
+    }
+  ],
+  "job_id": "6a78e72b3e1f34a7e32c103e",
+  "accelerator": "gpu"
+}

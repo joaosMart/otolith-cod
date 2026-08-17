@@ -1,0 +1,201 @@
+{
+  "shap_importances": [
+    {
+      "SigLIP Embeddings": 15.779839515686035,
+      "Length": 0.5993472933769226,
+      "Month": 0.3197641372680664,
+      "Latitude": 0.009656707756221294,
+      "Longitude": 0.06552692502737045,
+      "Is Survey": 0.04709790647029877,
+      "Seg Width": 0.14277583360671997,
+      "Seg Height": 0.13032041490077972,
+      "Seg Aspect Ratio": 0.12468243390321732
+    }
+  ],
+  "permutation_importances": [
+    {
+      "SigLIP Embeddings": {
+        "mean": 0.37038975940275254,
+        "std": 0.013762754918774019
+      },
+      "Length": {
+        "mean": 0.3836573544283488,
+        "std": 0.012691274014010769
+      },
+      "Month": {
+        "mean": 0.09477775806395751,
+        "std": 0.010449831920092455
+      },
+      "Latitude": {
+        "mean": 0.0029908901512656462,
+        "std": 0.002434450130015217
+      },
+      "Longitude": {
+        "mean": 0.02329886795882826,
+        "std": 0.004863693853690644
+      },
+      "Is Survey": {
+        "mean": 0.003307937359264779,
+        "std": 0.007629411638841874
+      },
+      "Seg Width": {
+        "mean": 0.11708307822026284,
+        "std": 0.010668441955885708
+      },
+      "Seg Height": {
+        "mean": 0.09214127054549749,
+        "std": 0.011267002419359766
+      },
+      "Seg Aspect Ratio": {
+        "mean": 0.07046223650868771,
+        "std": 0.00787061335731126
+      }
+    }
+  ],
+  "forward_selection": [
+    {
+      "step": 0,
+      "feature_added": "SigLIP Embeddings",
+      "features_included": [
+        "SigLIP Embeddings"
+      ],
+      "n_features": 1152,
+      "f1_mean": 0.502585173738383,
+      "f1_std": 0.0,
+      "accuracy_mean": 0.4988399071925754,
+      "accuracy_std": 0.0
+    },
+    {
+      "step": 1,
+      "feature_added": "Length",
+      "features_included": [
+        "SigLIP Embeddings",
+        "Length"
+      ],
+      "n_features": 1153,
+      "f1_mean": 0.558221120665713,
+      "f1_std": 0.0,
+      "accuracy_mean": 0.5359628770301624,
+      "accuracy_std": 0.0
+    },
+    {
+      "step": 2,
+      "feature_added": "Month",
+      "features_included": [
+        "SigLIP Embeddings",
+        "Length",
+        "Month"
+      ],
+      "n_features": 1155,
+      "f1_mean": 0.5806710211342749,
+      "f1_std": 0.0,
+      "accuracy_mean": 0.5614849187935035,
+      "accuracy_std": 0.0
+    },
+    {
+      "step": 3,
+      "feature_added": "Seg Width",
+      "features_included": [
+        "SigLIP Embeddings",
+        "Length",
+        "Month",
+        "Seg Width"
+      ],
+      "n_features": 1156,
+      "f1_mean": 0.5869472709033093,
+      "f1_std": 0.0,
+      "accuracy_mean": 0.5668986852281516,
+      "accuracy_std": 0.0
+    },
+    {
+      "step": 4,
+      "feature_added": "Seg Height",
+      "features_included": [
+        "SigLIP Embeddings",
+        "Length",
+        "Month",
+        "Seg Width",
+        "Seg Height"
+      ],
+      "n_features": 1157,
+      "f1_mean": 0.5941036586749119,
+      "f1_std": 0.0,
+      "accuracy_mean": 0.5738592420726991,
+      "accuracy_std": 0.0
+    },
+    {
+      "step": 5,
+      "feature_added": "Seg Aspect Ratio",
+      "features_included": [
+        "SigLIP Embeddings",
+        "Length",
+        "Month",
+        "Seg Width",
+        "Seg Height",
+        "Seg Aspect Ratio"
+      ],
+      "n_features": 1158,
+      "f1_mean": 0.5887743083508141,
+      "f1_std": 0.0,
+      "accuracy_mean": 0.5730858468677494,
+      "accuracy_std": 0.0
+    },
+    {
+      "step": 6,
+      "feature_added": "Longitude",
+      "features_included": [
+        "SigLIP Embeddings",
+        "Length",
+        "Month",
+        "Seg Width",
+        "Seg Height",
+        "Seg Aspect Ratio",
+        "Longitude"
+      ],
+      "n_features": 1159,
+      "f1_mean": 0.6043428083039554,
+      "f1_std": 0.0,
+      "accuracy_mean": 0.5854601701469451,
+      "accuracy_std": 0.0
+    },
+    {
+      "step": 7,
+      "feature_added": "Is Survey",
+      "features_included": [
+        "SigLIP Embeddings",
+        "Length",
+        "Month",
+        "Seg Width",
+        "Seg Height",
+        "Seg Aspect Ratio",
+        "Longitude",
+        "Is Survey"
+      ],
+      "n_features": 1160,
+      "f1_mean": 0.6129029293300355,
+      "f1_std": 0.0,
+      "accuracy_mean": 0.5893271461716937,
+      "accuracy_std": 0.0
+    },
+    {
+      "step": 8,
+      "feature_added": "Latitude",
+      "features_included": [
+        "SigLIP Embeddings",
+        "Length",
+        "Month",
+        "Seg Width",
+        "Seg Height",
+        "Seg Aspect Ratio",
+        "Longitude",
+        "Is Survey",
+        "Latitude"
+      ],
+      "n_features": 1161,
+      "f1_mean": 0.6123986309292143,
+      "f1_std": 0.0,
+      "accuracy_mean": 0.588553750966744,
+      "accuracy_std": 0.0
+    }
+  ]
+}

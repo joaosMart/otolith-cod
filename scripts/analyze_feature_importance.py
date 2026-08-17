@@ -94,6 +94,21 @@ def parse_args():
     return parser.parse_args()
 
 
+def _plot(fn, *args, **kwargs):
+    """Run a plotting call without letting it take the analysis down.
+
+    The figures are cosmetic; the numbers behind them cost minutes to compute.
+    A matplotlib keyword rename once discarded a complete SHAP run at the last
+    step, so plotting failures are now reported and stepped over.
+    """
+    try:
+        return fn(*args, **kwargs)
+    except Exception as exc:
+        print(f"  [warn] {getattr(fn, '__name__', fn)} failed: "
+              f"{type(exc).__name__}: {exc}")
+        return None
+
+
 def main():
     args = parse_args()
 
@@ -217,7 +232,7 @@ def main():
     print("-" * 60)
 
     # SHAP summary
-    plot_shap_summary(all_shap_importances, str(output_dir / "shap_summary.png"))
+    _plot(plot_shap_summary, all_shap_importances, str(output_dir / "shap_summary.png"))
 
     # SHAP dependence plots for ALL tabular features
     tabular_group_names = [name for name, _ in TABULAR_GROUP_SPEC]
@@ -230,7 +245,7 @@ def main():
             sin_idx = embedding_dim + TABULAR_COLUMN_NAMES.index("month_sin")
             cos_idx = embedding_dim + TABULAR_COLUMN_NAMES.index("month_cos")
             # Signed sin/cos plot (direction of influence)
-            plot_shap_dependence_month(
+            _plot(plot_shap_dependence_month, 
                 all_shap_values_raw,
                 all_X_test_unscaled,
                 sin_idx,
@@ -238,7 +253,7 @@ def main():
                 str(output_dir / "shap_dependence_month.png"),
             )
             # Overall impact plot (|SHAP| combined)
-            plot_shap_dependence_month_impact(
+            _plot(plot_shap_dependence_month_impact, 
                 all_shap_values_raw,
                 all_X_test_unscaled,
                 sin_idx,
@@ -246,7 +261,7 @@ def main():
                 str(output_dir / "shap_dependence_month_impact.png"),
             )
 
-            plot_shap_dependence_month_net(
+            _plot(plot_shap_dependence_month_net, 
                 all_shap_values_raw,
                 all_X_test_unscaled,
                 sin_idx,
@@ -256,7 +271,7 @@ def main():
         else:
             feat_idx = embedding_dim + TABULAR_COLUMN_NAMES.index(cols[0])
             safe_name = feat_name.lower().replace(" ", "_")
-            plot_shap_dependence(
+            _plot(plot_shap_dependence, 
                 all_shap_values_raw,
                 all_X_test_unscaled,
                 feat_idx,
@@ -265,7 +280,7 @@ def main():
             )
 
     # Permutation importance
-    plot_permutation_importance(all_perm_importances, str(output_dir / "permutation_importance.png"))
+    _plot(plot_permutation_importance, all_perm_importances, str(output_dir / "permutation_importance.png"))
 
     # --- Phase 3: Forward Selection Ablation ---
     print("\n" + "-" * 60)
@@ -287,19 +302,23 @@ def main():
         group_order=group_order,
     )
 
-    plot_forward_selection(forward_results, str(output_dir / "forward_selection.png"))
-
-    # --- Save all results ---
-    print("\n" + "-" * 60)
-    print("Saving Results")
-    print("-" * 60)
-
+    # Written before any plotting: the SHAP, permutation and forward-selection
+    # numbers cost minutes to compute, the figures are cosmetic, and a
+    # matplotlib API change must not be able to discard the results.
     save_results_json(
         all_shap_importances,
         all_perm_importances,
         forward_results,
         str(output_dir / "feature_importance.json"),
     )
+
+    _plot(plot_forward_selection, forward_results, str(output_dir / "forward_selection.png"))
+
+    # --- Save all results ---
+    print("\n" + "-" * 60)
+    print("Saving Results")
+    print("-" * 60)
+
 
     print("\n" + "=" * 60)
     print("ANALYSIS COMPLETE")
